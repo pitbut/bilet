@@ -1,0 +1,12 @@
+{
+  "title": "📝 Генератор экзаменационных билетов",
+  "description": "Профессиональный генератор билетов с ИИ. Python + Flask + Groq + Gemini. 4 режима работы. Экспорт в Word. Без проблем с CORS!",
+  "image": "preview.jpg",
+  "date": "2025-01-07",
+  "tags": ["Образование", "ИИ", "Python", "Flask", "Groq", "Gemini"],
+  "hashtags": ["#образование", "#экзамены", "#ии", "#python", "#flask", "#автоматизация", "#учителям", "#groq", "#gemini"],
+  "technologies": ["Python", "Flask", "Groq API", "Gemini API", "JavaScript"],
+  "author": "Robutpit",
+  "version": "3.0 (Flask)",
+  "license": "Educational"
+}
