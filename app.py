@@ -205,6 +205,115 @@ def export_tickets():
             'success': False
         }), 500
 
+@app.route('/api/template/download')
+def download_template():
+    """Скачать шаблон Word"""
+    template_content = """МИНИСТЕРСТВО ВЫСШЕГО ОБРАЗОВАНИЯ, НАУКИ И ИННОВАЦИЙ
+РЕСПУБЛИКИ УЗБЕКИСТАН
+
+ТАШКЕНТСКИЙ ИНСТИТУТ ТЕКСТИЛЬНОЙ И ЛЕГКОЙ ПРОМЫШЛЕННОСТИ
+Кафедра инженерной механики
+
+
+                                          «УТВЕРЖДАЮ»
+                                          Зав. кафедрой __________
+                                          «___» _________ 2025 г.
+
+
+
+ЭКЗАМЕНАЦИОННЫЙ БИЛЕТ № {ticket_number}
+
+
+Дисциплина: ______________________________________________________
+
+Направление: _____________________________________________________
+
+Курс: ________  Группа: ________  Семестр: ________
+
+
+
+XXX
+
+
+
+
+Преподаватель: ____________________ / _____________ /
+                      (подпись)              (Ф.И.О.)
+
+Дата составления: «___» _____________ 2025 г.
+
+
+
+
+═══════════════════════════════════════════════════════════════════
+
+ИНСТРУКЦИЯ ПО ИСПОЛЬЗОВАНИЮ ШАБЛОНА:
+
+1. Отредактируйте шапку (название института, кафедры)
+2. Заполните поля дисциплины, направления
+3. НЕ УДАЛЯЙТЕ маркеры:
+   - {ticket_number} - заменится на номер билета (1, 2, 3...)
+   - XXX - заменится на все вопросы билета
+
+4. Сохраните файл
+5. В приложении нажмите "Экспорт по шаблону"
+6. Загрузите этот файл
+7. Получите готовый документ со всеми билетами!
+═══════════════════════════════════════════════════════════════════
+"""
+    
+    return jsonify({
+        'content': template_content,
+        'filename': 'шаблон_билета.txt',
+        'success': True
+    })
+
+@app.route('/api/template/export', methods=['POST'])
+def export_with_template():
+    """Экспорт билетов по шаблону"""
+    try:
+        data = request.json
+        tickets = data.get('tickets', [])
+        template = data.get('template', '')
+        
+        if not tickets:
+            return jsonify({'error': 'Нет билетов для экспорта'}), 400
+        
+        if not template:
+            return jsonify({'error': 'Шаблон не загружен'}), 400
+        
+        # Генерируем все билеты
+        full_document = ''
+        
+        for i, ticket in enumerate(tickets):
+            # Форматируем вопросы
+            questions_text = ''
+            for j, question in enumerate(ticket['questions'], 1):
+                questions_text += f"{j}. {question}\n\n"
+            
+            # Заменяем маркеры в шаблоне
+            ticket_text = template.replace('{ticket_number}', str(ticket['number']))
+            ticket_text = ticket_text.replace('XXX', questions_text.strip())
+            ticket_text = ticket_text.replace('{questions}', questions_text.strip())
+            
+            full_document += ticket_text
+            
+            # Разделитель между билетами (кроме последнего)
+            if i < len(tickets) - 1:
+                full_document += '\n\n\n' + '═' * 70 + '\n\n\n'
+        
+        return jsonify({
+            'content': full_document,
+            'success': True,
+            'filename': f'билеты_по_шаблону_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'error': str(e),
+            'success': False
+        }), 500
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)

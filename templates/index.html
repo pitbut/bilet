@@ -182,6 +182,11 @@
             color: white;
         }
 
+        .btn-secondary {
+            background: linear-gradient(135deg, #95a5a6, #7f8c8d);
+            color: white;
+        }
+
         .loader {
             display: none;
             text-align: center;
@@ -438,7 +443,24 @@
         <!-- Results -->
         <div class="results" id="results">
             <h2 style="margin-bottom: 20px;">Сгенерированные билеты</h2>
-            <button class="btn btn-success" onclick="exportTickets()">📄 Скачать все билеты</button>
+            
+            <div style="margin-bottom: 20px;">
+                <button class="btn btn-success" onclick="exportTickets()">📄 Скачать все билеты</button>
+                <button class="btn btn-secondary" onclick="downloadTemplate()">📥 Скачать шаблон</button>
+                <button class="btn btn-success" onclick="showTemplateUpload()">📋 Экспорт по шаблону</button>
+            </div>
+
+            <div class="info-box" style="background: #fff3cd; border-left-color: #ffc107; display: none;" id="templateUpload">
+                <strong>📋 Экспорт по шаблону:</strong><br>
+                1. Скачайте шаблон выше<br>
+                2. Отредактируйте в Word (не удаляйте маркеры XXX и {ticket_number})<br>
+                3. Загрузите отредактированный файл:<br>
+                <input type="file" id="templateFile" accept=".txt,.docx" style="margin-top: 10px;">
+                <button class="btn btn-primary" onclick="exportWithTemplate()" style="margin-top: 10px;">
+                    🚀 Создать билеты по шаблону
+                </button>
+            </div>
+
             <div id="ticketsDisplay"></div>
         </div>
     </div>
@@ -717,6 +739,84 @@
                 
             } catch (error) {
                 alert('Ошибка экспорта: ' + error.message);
+            }
+        }
+
+        // Скачать шаблон
+        async function downloadTemplate() {
+            try {
+                const response = await fetch('/api/template/download');
+                const data = await response.json();
+                
+                if (!data.success) {
+                    throw new Error(data.error);
+                }
+                
+                // Скачиваем шаблон
+                const blob = new Blob([data.content], { type: 'text/plain;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = data.filename;
+                a.click();
+                URL.revokeObjectURL(url);
+                
+                alert('✅ Шаблон скачан!\n\n1. Откройте файл в Word\n2. Отредактируйте (не удаляйте XXX и {ticket_number})\n3. Сохраните\n4. Нажмите "Экспорт по шаблону"');
+                
+            } catch (error) {
+                alert('Ошибка: ' + error.message);
+            }
+        }
+
+        // Показать форму загрузки шаблона
+        function showTemplateUpload() {
+            const uploadDiv = document.getElementById('templateUpload');
+            uploadDiv.style.display = uploadDiv.style.display === 'none' ? 'block' : 'none';
+        }
+
+        // Экспорт по шаблону
+        async function exportWithTemplate() {
+            const fileInput = document.getElementById('templateFile');
+            
+            if (!fileInput.files || !fileInput.files[0]) {
+                alert('Выберите файл шаблона!');
+                return;
+            }
+            
+            try {
+                // Читаем файл
+                const file = fileInput.files[0];
+                const text = await file.text();
+                
+                // Отправляем на сервер
+                const response = await fetch('/api/template/export', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        tickets: generatedTickets,
+                        template: text
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (!data.success) {
+                    throw new Error(data.error);
+                }
+                
+                // Скачиваем результат
+                const blob = new Blob([data.content], { type: 'text/plain;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = data.filename;
+                a.click();
+                URL.revokeObjectURL(url);
+                
+                alert('✅ Билеты экспортированы по шаблону!\n\nОткройте файл в Word для окончательного форматирования.');
+                
+            } catch (error) {
+                alert('Ошибка: ' + error.message);
             }
         }
     </script>
