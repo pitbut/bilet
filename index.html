@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📝 Генератор экзаменационных билетов</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        /* API Settings */
+        .api-settings {
+            background: #2c3e50;
+            padding: 20px 30px;
+            color: white;
+        }
+
+        .api-row {
+            display: flex;
+            gap: 20px;
+            align-items: end;
+            flex-wrap: wrap;
+        }
+
+        .api-field {
+            flex: 1;
+            min-width: 250px;
+        }
+
+        .api-field label {
+            display: block;
+            font-size: 14px;
+            margin-bottom: 5px;
+            opacity: 0.9;
+        }
+
+        .api-field input,
+        .api-field select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #34495e;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+
+        .api-status {
+            font-size: 12px;
+            margin-top: 10px;
+            opacity: 0.8;
+        }
+
+        .tabs {
+            display: flex;
+            background: #ecf0f1;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-size: 1em;
+            font-weight: 600;
+            color: #7f8c8d;
+            transition: all 0.3s;
+            position: relative;
+        }
+
+        .tab.active {
+            color: #2c3e50;
+            background: white;
+        }
+
+        .tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: #3498db;
+        }
+
+        .tab-content {
+            display: none;
+            padding: 30px;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        textarea,
+        select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ecf0f1;
+            border-radius: 8px;
+            font-size: 1em;
+        }
+
+        textarea {
+            min-height: 150px;
+            resize: vertical;
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .btn {
+            padding: 15px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-right: 10px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(52, 152, 219, 0.3);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #27ae60, #229954);
+            color: white;
+        }
+
+        .loader {
+            display: none;
+            text-align: center;
+            padding: 30px;
+        }
+
+        .loader.active {
+            display: block;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .results {
+            margin-top: 30px;
+            display: none;
+        }
+
+        .results.active {
+            display: block;
+        }
+
+        .ticket {
+            background: #f8f9fa;
+            padding: 20px;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #3498db;
+        }
+
+        .ticket-header {
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: #2c3e50;
+        }
+
+        .question {
+            margin-bottom: 10px;
+            padding: 8px;
+            background: white;
+            border-radius: 5px;
+        }
+
+        .info-box {
+            background: #e8f4f8;
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+        }
+
+        @media (max-width: 768px) {
+            .grid-2 {
+                grid-template-columns: 1fr;
+            }
+            
+            .api-row {
+                flex-direction: column;
+            }
+            
+            .tabs {
+                flex-wrap: wrap;
+            }
+            
+            .tab {
+                flex: 1 1 50%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📝 Генератор экзаменационных билетов</h1>
+            <p>Python + Flask + ИИ (Groq и Gemini)</p>
+        </div>
+
+        <!-- API Settings -->
+        <div class="api-settings">
+            <div class="api-row">
+                <div class="api-field">
+                    <label>🤖 ИИ Провайдер</label>
+                    <select id="provider">
+                        <option value="groq">Groq (FREE) ⭐</option>
+                        <option value="gemini">Google Gemini (FREE)</option>
+                    </select>
+                </div>
+                <div class="api-field" style="flex: 2;">
+                    <label>🔑 API Ключ</label>
+                    <input type="password" id="apiKey" placeholder="Вставьте ваш API ключ">
+                </div>
+            </div>
+            <div class="api-status" id="apiStatus">
+                <strong>Groq:</strong> console.groq.com/keys | 
+                <strong>Gemini:</strong> aistudio.google.com/app/apikey
+            </div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab(0)">📋 Готовые вопросы</button>
+            <button class="tab" onclick="switchTab(1)">🎯 Темы + ИИ</button>
+            <button class="tab" onclick="switchTab(2)">🤖 Автогенерация</button>
+            <button class="tab" onclick="switchTab(3)">📦 По блокам</button>
+        </div>
+
+        <!-- Режим 1: Готовые вопросы -->
+        <div class="tab-content active" id="tab-0">
+            <div class="info-box">
+                💡 Загрузите или введите готовые вопросы (один вопрос на строку)
+            </div>
+
+            <div class="form-group">
+                <label>Вопросы</label>
+                <textarea id="questions1" placeholder="Что такое механика?
+Перечислите законы Ньютона.
+Объясните принцип работы двигателя."></textarea>
+            </div>
+
+            <div class="grid-2">
+                <div class="form-group">
+                    <label>Количество билетов</label>
+                    <input type="number" id="ticketCount1" value="20" min="1">
+                </div>
+                <div class="form-group">
+                    <label>Вопросов в билете</label>
+                    <input type="number" id="questionsPerTicket1" value="3" min="1">
+                </div>
+            </div>
+
+            <button class="btn btn-primary" onclick="generateMode1()">🎲 Сгенерировать</button>
+        </div>
+
+        <!-- Режим 2: Темы + ИИ -->
+        <div class="tab-content" id="tab-1">
+            <div class="info-box">
+                💡 Укажите темы, ИИ сгенерирует вопросы по каждой теме
+            </div>
+
+            <div class="form-group">
+                <label>Предмет/Дисциплина</label>
+                <input type="text" id="subject2" placeholder="Техническая механика">
+            </div>
+
+            <div class="form-group">
+                <label>Темы (одна на строку)</label>
+                <textarea id="topics2" placeholder="Статика
+Кинематика
+Динамика"></textarea>
+            </div>
+
+            <div class="grid-2">
+                <div class="form-group">
+                    <label>Количество билетов</label>
+                    <input type="number" id="ticketCount2" value="20" min="1">
+                </div>
+                <div class="form-group">
+                    <label>Вопросов в билете</label>
+                    <input type="number" id="questionsPerTicket2" value="3" min="1">
+                </div>
+            </div>
+
+            <button class="btn btn-primary" onclick="generateMode2()">🤖 Сгенерировать с ИИ</button>
+        </div>
+
+        <!-- Режим 3: Автогенерация -->
+        <div class="tab-content" id="tab-2">
+            <div class="info-box">
+                💡 Укажите только предмет - ИИ создаст все вопросы
+            </div>
+
+            <div class="form-group">
+                <label>Предмет/Дисциплина</label>
+                <input type="text" id="subject3" placeholder="Материаловедение">
+            </div>
+
+            <div class="form-group">
+                <label>Примерные темы (необязательно)</label>
+                <textarea id="topics3" placeholder="Оставьте пустым для полной автогенерации"></textarea>
+            </div>
+
+            <div class="grid-2">
+                <div class="form-group">
+                    <label>Количество билетов</label>
+                    <input type="number" id="ticketCount3" value="20" min="1">
+                </div>
+                <div class="form-group">
+                    <label>Вопросов в билете</label>
+                    <input type="number" id="questionsPerTicket3" value="3" min="1">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Уровень сложности</label>
+                <select id="difficulty3">
+                    <option value="базовый">Базовый</option>
+                    <option value="средний" selected>Средний</option>
+                    <option value="продвинутый">Продвинутый</option>
+                </select>
+            </div>
+
+            <button class="btn btn-primary" onclick="generateMode3()">🤖 Автогенерация</button>
+        </div>
+
+        <!-- Режим 4: По блокам -->
+        <div class="tab-content" id="tab-3">
+            <div class="info-box">
+                💡 Формат: [Блок] вопрос1, вопрос2, ...
+            </div>
+
+            <div class="form-group">
+                <label>Блоки с вопросами</label>
+                <textarea id="blocks4" placeholder="[Блок 1: Основы]
+Что такое механика?
+Какие разделы включает механика?
+
+[Блок 2: Законы]
+Первый закон Ньютона
+Второй закон Ньютона"></textarea>
+            </div>
+
+            <div class="grid-2">
+                <div class="form-group">
+                    <label>Количество билетов</label>
+                    <input type="number" id="ticketCount4" value="20" min="1">
+                </div>
+                <div class="form-group">
+                    <label>Вопросов из каждого блока</label>
+                    <input type="number" id="questionsPerBlock4" value="1" min="1">
+                </div>
+            </div>
+
+            <button class="btn btn-primary" onclick="generateMode4()">🎲 Сгенерировать</button>
+        </div>
+
+        <!-- Loader -->
+        <div class="loader" id="loader">
+            <div class="spinner"></div>
+            <p>Генерация с помощью ИИ...</p>
+        </div>
+
+        <!-- Results -->
+        <div class="results" id="results">
+            <h2 style="margin-bottom: 20px;">Сгенерированные билеты</h2>
+            <button class="btn btn-success" onclick="exportTickets()">📄 Скачать все билеты</button>
+            <div id="ticketsDisplay"></div>
+        </div>
+    </div>
+
+    <script>
+        let generatedTickets = [];
+
+        function switchTab(index) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            
+            document.querySelectorAll('.tab')[index].classList.add('active');
+            document.getElementById(`tab-${index}`).classList.add('active');
+            
+            document.getElementById('results').classList.remove('active');
+        }
+
+        function showLoader(show) {
+            document.getElementById('loader').classList.toggle('active', show);
+        }
+
+        function displayTickets() {
+            const display = document.getElementById('ticketsDisplay');
+            display.innerHTML = '';
+            
+            generatedTickets.forEach(ticket => {
+                const div = document.createElement('div');
+                div.className = 'ticket';
+                
+                let html = `<div class="ticket-header">Билет № ${ticket.number}</div>`;
+                ticket.questions.forEach((q, i) => {
+                    html += `<div class="question"><strong>${i + 1}.</strong> ${q}</div>`;
+                });
+                
+                div.innerHTML = html;
+                display.appendChild(div);
+            });
+            
+            document.getElementById('results').classList.add('active');
+            document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function shuffleArray(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+        }
+
+        // Режим 1: Готовые вопросы
+        function generateMode1() {
+            const text = document.getElementById('questions1').value.trim();
+            if (!text) {
+                alert('Введите вопросы!');
+                return;
+            }
+            
+            const questions = text.split('\n').filter(q => q.trim());
+            const ticketCount = parseInt(document.getElementById('ticketCount1').value);
+            const questionsPerTicket = parseInt(document.getElementById('questionsPerTicket1').value);
+            
+            if (questions.length < questionsPerTicket) {
+                alert(`Нужно минимум ${questionsPerTicket} вопросов!`);
+                return;
+            }
+            
+            generateTicketsFromQuestions(questions, ticketCount, questionsPerTicket);
+        }
+
+        function generateTicketsFromQuestions(questions, ticketCount, questionsPerTicket) {
+            generatedTickets = [];
+            const available = [...questions];
+            shuffleArray(available);
+            
+            for (let i = 0; i < ticketCount; i++) {
+                if (available.length < questionsPerTicket) {
+                    available.push(...questions);
+                    shuffleArray(available);
+                }
+                
+                const ticket = {
+                    number: i + 1,
+                    questions: available.splice(0, questionsPerTicket)
+                };
+                generatedTickets.push(ticket);
+            }
+            
+            displayTickets();
+        }
+
+        // Режим 2: Темы + ИИ
+        async function generateMode2() {
+            const provider = document.getElementById('provider').value;
+            const apiKey = document.getElementById('apiKey').value.trim();
+            const subject = document.getElementById('subject2').value.trim();
+            const topicsText = document.getElementById('topics2').value.trim();
+            
+            if (!apiKey) {
+                alert('Введите API ключ!');
+                return;
+            }
+            
+            if (!subject || !topicsText) {
+                alert('Заполните предмет и темы!');
+                return;
+            }
+            
+            const topics = topicsText.split('\n').filter(t => t.trim());
+            const ticketCount = parseInt(document.getElementById('ticketCount2').value);
+            const questionsPerTicket = parseInt(document.getElementById('questionsPerTicket2').value);
+            
+            showLoader(true);
+            
+            try {
+                const response = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        provider,
+                        api_key: apiKey,
+                        subject,
+                        topics,
+                        mode: 2,
+                        total_questions: ticketCount * questionsPerTicket
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (!data.success) {
+                    throw new Error(data.error);
+                }
+                
+                generateTicketsFromQuestions(data.questions, ticketCount, questionsPerTicket);
+                
+            } catch (error) {
+                alert('Ошибка: ' + error.message);
+            } finally {
+                showLoader(false);
+            }
+        }
+
+        // Режим 3: Автогенерация
+        async function generateMode3() {
+            const provider = document.getElementById('provider').value;
+            const apiKey = document.getElementById('apiKey').value.trim();
+            const subject = document.getElementById('subject3').value.trim();
+            const topicsText = document.getElementById('topics3').value.trim();
+            const difficulty = document.getElementById('difficulty3').value;
+            
+            if (!apiKey) {
+                alert('Введите API ключ!');
+                return;
+            }
+            
+            if (!subject) {
+                alert('Укажите предмет!');
+                return;
+            }
+            
+            const topics = topicsText ? topicsText.split('\n').filter(t => t.trim()) : [];
+            const ticketCount = parseInt(document.getElementById('ticketCount3').value);
+            const questionsPerTicket = parseInt(document.getElementById('questionsPerTicket3').value);
+            
+            showLoader(true);
+            
+            try {
+                const response = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        provider,
+                        api_key: apiKey,
+                        subject,
+                        topics,
+                        mode: 3,
+                        total_questions: ticketCount * questionsPerTicket,
+                        difficulty
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (!data.success) {
+                    throw new Error(data.error);
+                }
+                
+                generateTicketsFromQuestions(data.questions, ticketCount, questionsPerTicket);
+                
+            } catch (error) {
+                alert('Ошибка: ' + error.message);
+            } finally {
+                showLoader(false);
+            }
+        }
+
+        // Режим 4: По блокам
+        function generateMode4() {
+            const text = document.getElementById('blocks4').value.trim();
+            if (!text) {
+                alert('Введите блоки!');
+                return;
+            }
+            
+            const blocks = parseBlocks(text);
+            const ticketCount = parseInt(document.getElementById('ticketCount4').value);
+            const questionsPerBlock = parseInt(document.getElementById('questionsPerBlock4').value);
+            
+            generatedTickets = [];
+            
+            for (let i = 0; i < ticketCount; i++) {
+                const ticket = {
+                    number: i + 1,
+                    questions: []
+                };
+                
+                blocks.forEach(block => {
+                    const shuffled = [...block.questions];
+                    shuffleArray(shuffled);
+                    ticket.questions.push(...shuffled.slice(0, questionsPerBlock));
+                });
+                
+                generatedTickets.push(ticket);
+            }
+            
+            displayTickets();
+        }
+
+        function parseBlocks(text) {
+            const blocks = [];
+            const lines = text.split('\n');
+            let currentBlock = null;
+            
+            lines.forEach(line => {
+                line = line.trim();
+                if (!line) return;
+                
+                if (line.startsWith('[') && line.includes(']')) {
+                    const name = line.substring(1, line.indexOf(']'));
+                    currentBlock = { name, questions: [] };
+                    blocks.push(currentBlock);
+                } else if (currentBlock) {
+                    currentBlock.questions.push(line);
+                }
+            });
+            
+            return blocks;
+        }
+
+        // Экспорт
+        async function exportTickets() {
+            try {
+                const response = await fetch('/api/export', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        tickets: generatedTickets,
+                        format: 'txt'
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (!data.success) {
+                    throw new Error(data.error);
+                }
+                
+                // Скачиваем файл
+                const blob = new Blob([data.content], { type: 'text/plain;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = data.filename;
+                a.click();
+                URL.revokeObjectURL(url);
+                
+            } catch (error) {
+                alert('Ошибка экспорта: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>
