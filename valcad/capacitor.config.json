@@ -1,0 +1,7 @@
+{
+  "appId": "ru.valcad.app",
+  "appName": "ВалCAD",
+  "webDir": "dist",
+  "android": { "allowMixedContent": false },
+  "plugins": {}
+}

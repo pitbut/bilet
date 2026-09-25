@@ -1,0 +1,12 @@
+<!doctype html><html><body style="margin:0"><div id="v" style="width:1000px;height:600px"></div>
+<script type="module">
+import { samples } from './samples.mjs';
+import { computeModel } from '../src/geom.js';
+import { Viewer3D } from '../src/view3d.js';
+const k = new URLSearchParams(location.search).get('k') || 'a';
+const v = new Viewer3D(document.getElementById('v'));
+v.setModel(computeModel(samples()[k]));
+if (location.search.includes('cut')) v.setCut(true);
+v.renderer.render(v.scene, v.camera);
+window.done = true;
+</script></body></html>

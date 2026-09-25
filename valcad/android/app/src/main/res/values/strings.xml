@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ВалCAD</string>
+    <string name="title_activity_main">ВалCAD</string>
+    <string name="package_name">ru.valcad.app</string>
+    <string name="custom_url_scheme">ru.valcad.app</string>
+</resources>
