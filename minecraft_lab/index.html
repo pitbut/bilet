@@ -1,0 +1,845 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+<title>ДВ-1М Лаборатория</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@500;700&family=PT+Sans:wght@400;700&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: full-screen 3D hall; HUD panels float over it like a block-game inventory (single dark look by choice) */
+:root {
+  --navy: #08101c;
+  --panel: rgba(8, 16, 28, .93);
+  --rim: #c8ccd2;
+  --slot: #1b2735;
+  --amber: #ffc450;
+  --cyan: #5fd0ff;
+  --green: #7be07b;
+  --red: #ff6b6b;
+  --ink: #f2f5f8;
+  --ink-2: #dfe7ef;
+  --muted: #8ea3b8;
+  --sky: #bfe3ff;
+  --f-display: "Pixelify Sans", "Courier New", monospace;
+  --f-body: "PT Sans", "Segoe UI", Arial, sans-serif;
+  --f-mono: "JetBrains Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--sky); color: var(--ink); font-family: var(--f-body); overflow: hidden; }
+#app { position: fixed; inset: 0; }
+canvas#gl { display: block; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+.hud { position: fixed; pointer-events: none; }
+.box { background: var(--panel); border: 3px solid var(--rim); box-shadow: 0 0 0 2px #0006 inset; }
+
+/* slide panel */
+#slide { top: calc(12px + env(safe-area-inset-top, 0px)); right: 12px; width: min(380px, 42vw); max-height: calc(100% - 150px); overflow: auto; padding: 16px 18px; pointer-events: auto; }
+#slide .count { font-family: var(--f-display); color: var(--amber); letter-spacing: .08em; font-size: 14px; }
+#slide h2 { font-family: var(--f-body); font-weight: 700; font-size: 22px; line-height: 1.15; margin: 6px 0 10px; text-wrap: balance; color: var(--ink); }
+#slide hr { border: 0; height: 3px; background: var(--amber); margin: 0 0 12px; }
+#slide ul { margin: 0; padding-left: 18px; display: grid; gap: 8px; color: var(--ink-2); font-size: 15px; line-height: 1.4; }
+#slide li::marker { color: var(--amber); }
+#slide .nav { display: flex; gap: 8px; margin-top: 14px; }
+
+/* progress */
+#bar { top: calc(10px + env(safe-area-inset-top, 0px)); left: 12px; display: flex; gap: 4px; }
+#bar i { width: 18px; height: 10px; background: #22364d; border: 1px solid #0008; }
+#bar i.done { background: #3f7fae; }
+#bar i.cur { background: var(--amber); }
+
+/* crosshair + look */
+#cross { left: 50%; top: 50%; width: 18px; height: 18px; transform: translate(-50%, -50%); }
+#cross::before, #cross::after { content: ""; position: absolute; background: #fffd; }
+#cross::before { left: 0; right: 0; top: 8px; height: 2px; }
+#cross::after { top: 0; bottom: 0; left: 8px; width: 2px; }
+#look { left: 50%; top: calc(50% + 22px); transform: translateX(-50%); color: var(--amber); font-family: var(--f-display); font-size: 16px; text-shadow: 0 2px 0 #000a; white-space: nowrap; }
+
+/* toast */
+#toast { left: 50%; top: 13%; transform: translateX(-50%); font-family: var(--f-display); font-size: 22px; text-shadow: 0 2px 0 #000b; text-align: center; width: max-content; max-width: 90vw; }
+
+/* hotbar */
+#hotbar { left: 50%; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); display: flex; gap: 4px; pointer-events: auto; }
+.slot { width: 58px; height: 58px; background: var(--slot); border: 3px solid var(--rim); color: var(--ink); display: grid; place-content: center; text-align: center; cursor: pointer; font: inherit; padding: 0; }
+.slot b { font-family: var(--f-display); color: var(--amber); font-size: 18px; line-height: 1; }
+.slot span { font-size: 11px; margin-top: 3px; }
+.slot.on-g { border-color: var(--green); }
+.slot.on-c { border-color: var(--cyan); }
+.slot.on-a { border-color: var(--amber); }
+.slot:hover { background: #26374a; }
+.slot:focus-visible, .btn:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.btn { font-family: var(--f-display); font-size: 14px; background: var(--slot); color: var(--ink); border: 2px solid var(--rim); padding: 6px 12px; cursor: pointer; }
+.btn:hover { background: #26374a; }
+
+/* disassembly step panel */
+#steps { left: 12px; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); width: min(420px, 50vw); padding: 12px 14px; }
+#steps .head { font-family: var(--f-display); color: var(--amber); font-size: 16px; margin-bottom: 6px; }
+#steps dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0; font-size: 14px; }
+#steps dt { color: var(--muted); }
+#steps dd { margin: 0; }
+#steps .pips { display: flex; gap: 4px; margin-top: 8px; }
+#steps .pips i { flex: 1; height: 6px; background: #22364d; }
+#steps .pips i.on { background: var(--amber); }
+
+/* part info card */
+#info { left: 50%; top: 22%; transform: translateX(-50%); width: min(560px, 88vw); padding: 14px 16px; }
+#info h3 { font-family: var(--f-display); color: var(--amber); margin: 0 0 6px; font-size: 20px; }
+#info p { margin: 0; font-size: 15px; line-height: 1.45; }
+
+/* help */
+#help { left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(720px, 92vw); max-height: 86%; overflow: auto; padding: 18px 22px; pointer-events: auto; }
+#help h3 { font-family: var(--f-display); color: var(--amber); margin: 0 0 4px; font-size: 24px; }
+#help .sub { color: var(--muted); margin: 0 0 12px; }
+#help table { border-collapse: collapse; width: 100%; font-size: 14px; }
+#help td { padding: 5px 8px; border-top: 1px solid #ffffff1a; vertical-align: top; }
+#help td:first-child { font-family: var(--f-mono); color: var(--amber); white-space: nowrap; width: 1%; }
+#help .row { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+
+/* touch pad */
+#pad { left: 12px; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); display: none; grid-template-columns: repeat(3, 48px); gap: 4px; pointer-events: auto; }
+#pad button { height: 48px; font-size: 20px; }
+body.touch #pad { display: grid; }
+body.touch #steps { bottom: calc(250px + env(safe-area-inset-bottom, 0px)); }
+
+@media (max-width: 760px) {
+  #slide { width: auto; left: 12px; right: 12px; top: auto; bottom: calc(76px + env(safe-area-inset-bottom, 0px)); max-height: 34%; padding: 10px 12px; }
+  #slide h2 { font-size: 17px; }
+  #slide ul { font-size: 13px; gap: 4px; }
+  #hotbar { gap: 2px; }
+  .slot { width: calc((100vw - 44px) / 11); height: 42px; border-width: 2px; }
+  .slot b { font-size: 13px; }
+  .slot span { display: none; }
+  #steps { width: auto; right: 12px; top: calc(28px + env(safe-area-inset-top, 0px)); bottom: auto; font-size: 12px; }
+  #steps dl { font-size: 12px; }
+  body.touch #steps { bottom: auto; }
+  #pad { bottom: calc(76px + env(safe-area-inset-bottom, 0px) + 36%); }
+  #bar i { width: 11px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div id="app"><canvas id="gl" aria-label="3D-зал с машиной ДВ-1М"></canvas></div>
+
+<div id="bar" class="hud" aria-hidden="true"></div>
+<div id="cross" class="hud" aria-hidden="true"></div>
+<div id="look" class="hud"></div>
+<div id="toast" class="hud" role="status"></div>
+
+<section id="slide" class="hud box" aria-live="polite">
+  <div class="count" id="s-count">СЛАЙД 1 / 20</div>
+  <h2 id="s-title"></h2>
+  <hr>
+  <ul id="s-body"></ul>
+  <div class="nav">
+    <button class="btn" id="s-prev" type="button">‹ Пред.</button>
+    <button class="btn" id="s-next" type="button">След. ›</button>
+  </div>
+</section>
+
+<section id="steps" class="hud box" hidden>
+  <div class="head" id="st-head"></div>
+  <dl>
+    <dt>Операция</dt><dd id="st-op"></dd>
+    <dt>Деталь</dt><dd id="st-part"></dd>
+    <dt>Инструмент</dt><dd id="st-tool"></dd>
+    <dt>Результат</dt><dd id="st-res"></dd>
+  </dl>
+  <div class="pips" id="st-pips"></div>
+</section>
+
+<section id="info" class="hud box" hidden>
+  <h3 id="i-title"></h3>
+  <p id="i-body"></p>
+</section>
+
+<div id="pad" class="hud" aria-label="Движение">
+  <span></span><button class="btn" data-k="KeyW" type="button">▲</button><span></span>
+  <button class="btn" data-k="KeyA" type="button">◀</button><button class="btn" data-k="KeyS" type="button">▼</button><button class="btn" data-k="KeyD" type="button">▶</button>
+</div>
+
+<nav id="hotbar" class="hud" aria-label="Команды"></nav>
+
+<section id="help" class="hud box">
+  <h3>ДВ-1М · лаборатория</h3>
+  <p class="sub">Разборка-сборка рабочего барабана валичного джина. 20 слайдов на досках по стенам зала, машина в центре.</p>
+  <table>
+    <tr><td>W A S D, мышь</td><td>ходьба, обзор (щёлкните по сцене, чтобы захватить мышь; на телефоне ведите пальцем)</td></tr>
+    <tr><td>Ctrl / Пробел</td><td>бег / прыжок</td></tr>
+    <tr><td>N / P</td><td>следующий / предыдущий слайд (переход к доске)</td></tr>
+    <tr><td>C</td><td>подойти к машине</td></tr>
+    <tr><td>R / B</td><td>разборка вперёд / сборка назад (по шагам методички)</td></tr>
+    <tr><td>M</td><td>пуск и остановка машины</td></tr>
+    <tr><td>K</td><td>семенной / технический хлопок (отбойный барабан 315 / 252 об/мин)</td></tr>
+    <tr><td>E</td><td>осмотреть деталь под прицелом; в шаге «диски» отметить диск как брак</td></tr>
+    <tr><td>F</td><td>режим полёта (Пробел вверх, Shift вниз)</td></tr>
+    <tr><td>Tab</td><td>скрыть панель слайда</td></tr>
+    <tr><td>Esc</td><td>освободить курсор</td></tr>
+    <tr><td>H</td><td>открыть / закрыть эту подсказку</td></tr>
+  </table>
+  <p class="sub" style="margin-top:12px">Подойдите к доске и посмотрите на неё — слайд откроется справа. Модель схематична: 1 блок = 100 мм.</p>
+  <div class="row"><button class="btn" id="h-close" type="button">Начать</button></div>
+</section>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+// ─────────────── данные (методичка «Монтаж и эксплуатация отраслевых машин», лаб. работа 2) ───────────────
+const SLIDES = [
+ ["Разборка-сборка лабораторного валикового джина",
+  ["Дисциплина: «Монтаж и эксплуатация отраслевых машин»",
+   "Лабораторное занятие, бакалавриат",
+   "Направление 60721400 — Технологии и оборудование лёгкой промышленности",
+   "Объект: валичный джин ДВ-1М (рабочий барабан)"]],
+ ["Актуальность: зачем уметь разбирать и собирать",
+  ["Основа монтажа, технического обслуживания и ремонта",
+   "Трудоёмкость ТО — 45 чел.-ч; наработка до кап. ремонта — не менее 2800 ч",
+   "Среднее время восстановления — не более 3,0 ч",
+   "Качество сборки определяет зазоры, а значит качество волокна и семян"]],
+ ["Цель и задачи работы",
+  ["Изучить устройство и порядок разборки-сборки рабочего барабана",
+   "1. Демонтировать рабочий барабан с джина",
+   "2. Снять крепёжную гайку и прижимную шайбу",
+   "3. Дефектовка, отбраковка, сборка в обратном порядке",
+   "4. Кинематическая схема и чертёж разборки-сборки"]],
+ ["Назначение валичного джина",
+  ["Разделение длинноволокнистого хлопка-сырца I–III типов на сорта I–V",
+   "Операция — джинирование: отделение волокна от семян",
+   "Модели ДВ-1М и 2ДВ; в линиях по 10 или 5 рядов",
+   "Влажность сырца 6,5–7,0 %; производительность 100–130 кг/ч"]],
+ ["Общее устройство машины",
+  ["Питатель: колковые валики, колосниковая решётка, сетка, магнитный валик",
+   "Рабочий барабан (Ø190 мм) и отбойный барабан (Ø150 мм)",
+   "Неподвижный нож и передний козырёк",
+   "Электродвигатели, шкаф управления, два пульта"]],
+ ["Основные рабочие органы",
+  ["Рабочий барабан: диски РКМ-2/РКМ-4, канавки под 30°, шаг 42–45 мм",
+   "Отбойный барабан: 8 рядов лопаток, не менее 145 мм после ремонта",
+   "Нож: пружинная сталь 8 мм, высота 115 мм (минимум 55 мм)",
+   "Привод питателя: двигатель пост. тока, клиноременная передача, червячный редуктор"]],
+ ["Принцип работы: джинирование протягиванием",
+  ["Хлопок-сырец подаётся питателем; магнитный валик улавливает металл",
+   "Волокно протягивается по поверхности барабана между барабаном и ножом",
+   "Семена не проходят под нож и отделяются ударами отбойного барабана",
+   "Результат определяется технологическими зазорами"]],
+ ["Инструменты и оборудование",
+  ["Лабораторный валиковый джин",
+   "Набор слесарно-монтажных ключей различных размеров",
+   "Пособия: общий вид, кинематическая схема, сборочный чертёж барабана",
+   "Измерительные средства (штангенциркуль, щупы) — уточнить у преподавателя"]],
+ ["Подготовка к разборке",
+  ["Изучить схемы и правила техники безопасности",
+   "Остановить машину, отключить электропитание",
+   "Исключить случайный пуск привода",
+   "Подготовить рабочее место, ключи и тару для деталей",
+   "(общие рекомендации — в методичке не указаны)"]],
+ ["Последовательность разборки барабана",
+  ["1. Демонтаж рабочего барабана с джина — набор ключей",
+   "2. Снятие крепёжной гайки — ключ по размеру гайки",
+   "3. Снятие прижимной шайбы (прокладки)",
+   "4. Разборка набора дисков — по сборочному чертежу",
+   "Детали укладывать в порядке снятия"]],
+ ["Контроль и дефектация деталей",
+  ["Рабочий барабан: износ, глубокие канавки (Ø не менее 110 мм)",
+   "Нож: износ и загиб кромки, высота не менее 55 мм",
+   "Отбойный барабан: диаметр не менее 145 мм",
+   "Диски: Ø190±2, отверстие Ø60±1, толщина 5,7±0,7 мм",
+   "Сетка питателя и вариатор: засорение, износ"]],
+ ["Измерение и контроль состояния",
+  ["Отбойный барабан — нож: 0,5–1,5 мм",
+   "Отбойный — рабочий барабан: 0,5–1,0 мм",
+   "Отбойный барабан — козырёк: 0,5–2,0 мм",
+   "Колковый валик — сетка: 13 (+2/−1) мм",
+   "Отбойный барабан — сетка: 12 (+2/−1) мм"]],
+ ["Подготовка к сборке",
+  ["Отбраковать повреждённые детали",
+   "Комплект барабана — 200 дисков (4 пачки по 50 шт.)",
+   "Очистить детали и посадочные поверхности",
+   "Разложить детали в порядке, обратном разборке"]],
+ ["Последовательность сборки",
+  ["Сборка — в последовательности, обратной разборке",
+   "Диски на вал › прижимная шайба › крепёжная гайка",
+   "Установка барабана на джин",
+   "Регулировка зазоров и контроль"]],
+ ["Взаимное положение органов и зазоры",
+  ["Зазор более 1,5 мм — пропуск недоджинированных семян",
+   "Зазор менее 0,5 мм — рост нагрузки и ухудшение соосности",
+   "Нож не ниже требуемого уровня, кромка ровная",
+   "Схема — условная, не в масштабе"]],
+ ["Контроль после сборки",
+  ["Правильность установки барабана",
+   "Затяжка гайки и прижимной шайбы",
+   "Свободное вращение вручную, без заеданий",
+   "Зазоры соответствуют таблице 1",
+   "Ограждения закрыты (концевые выключатели)"]],
+ ["Пробный запуск и контрольные скорости",
+  ["Закрыть ограждения; автоматы и переключатель В6 — в рабочее положение",
+   "Кнопка «Старт» с пульта",
+   "v = π·D·n / 60",
+   "Рабочий барабан: D = 0,19 м, n = 270 об/мин › v ≈ 2,69 м/с",
+   "Отбойный: D = 0,15 м › 2,47 м/с (315 об/мин), 1,98 м/с (252 об/мин)"]],
+ ["Возможные ошибки и неисправности",
+  ["Недоджинирование — нож недостаточно зафиксирован",
+   "Дробление семян — нарушены зазоры, износ барабана, загнута кромка ножа",
+   "Наматывание волокна — износ барабана, загиб кромки ножа",
+   "Падение производительности — забита сетка, износ ножа",
+   "Двигатели не запускаются — открыто ограждение, автоматы, В6"]],
+ ["Техника безопасности и значение для инженера",
+  ["Изучить правила ТБ до начала работы",
+   "Разборка и сборка — только при отключённом питании",
+   "Не нарушать целостность ограждений",
+   "Навык монтажа, дефектации и регулировки — основа профессии"]],
+ ["Итог лабораторной работы",
+  ["1. Джин отделяет волокно протягиванием между барабаном и ножом",
+   "2. Разборка: гайка › шайба › дефектовка › сборка в обратном порядке",
+   "3. Качество определяют зазоры (0,5–1,5 мм и др.)",
+   "Результат: дефектовочная ведомость, схема и чертёж",
+   "Вопрос: почему зазор более 1,5 мм и менее 0,5 мм недопустимы?"]],
+];
+// шаги разборки: операция, деталь, инструмент, результат
+const DISASSEMBLY = [
+ ["Исходное состояние", "Рабочий барабан установлен в джине", "—", "Машина остановлена, питание отключено"],
+ ["1. Демонтаж барабана", "Рабочий барабан", "Набор ключей", "Барабан снят с джина"],
+ ["2. Снятие гайки", "Крепёжная гайка", "Ключ по размеру гайки", "Барабан освобождён от крепления"],
+ ["3. Снятие шайбы", "Прижимная шайба (прокладка)", "—", "Открыт доступ к набору дисков"],
+ ["4. Разборка дисков", "Диски РКМ-2 / РКМ-4", "По сборочному чертежу", "Детали готовы к дефектовке"],
+];
+
+// ─────────────── константы ───────────────
+const HALL = 25, WALL_H = 10, BOARD_W = 7.4, BOARD_H = 5, BOARD_Y = 4.4;
+const STATION_DIST = 9.5, READ_DIST = 17, PLATFORM_TOP = 0.4, EYE = 1.8;
+const AMBER = '#ffc450', CYAN = '#5fd0ff', GREEN = '#7be07b', RED = '#ff6b6b', WHITE = '#f2f5f8';
+const D2R = Math.PI / 180;
+const $ = id => document.getElementById(id);
+
+// ─────────────── процедурные «пиксельные» текстуры ───────────────
+function rng(seed) {
+  let h = 2166136261;
+  for (const c of seed) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+  return () => { h += 0x6D2B79F5; let t = h; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+function pix(base, v, seed, fn) {
+  const c = document.createElement('canvas'); c.width = c.height = 16;
+  const g = c.getContext('2d'), r = rng(seed), im = g.createImageData(16, 16);
+  for (let i = 0; i < 256; i++) {
+    const d = Math.round((r() * 2 - 1) * v);
+    for (let k = 0; k < 3; k++) im.data[i * 4 + k] = Math.max(0, Math.min(255, base[k] + d));
+    im.data[i * 4 + 3] = 255;
+  }
+  g.putImageData(im, 0, 0);
+  if (fn) fn(g, r);
+  const t = new THREE.CanvasTexture(c);
+  t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+const line = (g, col, x0, y0, x1, y1) => { g.fillStyle = col; g.fillRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0) + 1, Math.abs(y1 - y0) + 1); };
+const outline = (g, col) => { g.strokeStyle = col; g.lineWidth = 1; g.strokeRect(.5, .5, 15, 15); };
+const TEX = {
+  grass: pix([92, 150, 58], 22, 'grass'),
+  stone: pix([128, 128, 132], 12, 'stone'),
+  brick: pix([132, 130, 136], 10, 'brick', g => { const c = 'rgb(70,70,76)'; line(g, c, 0, 7, 15, 7); line(g, c, 0, 15, 15, 15); line(g, c, 7, 0, 7, 7); line(g, c, 3, 8, 3, 15); line(g, c, 11, 8, 11, 15); }),
+  planks: pix([176, 138, 84], 8, 'planks', g => { for (const y of [3, 7, 11, 15]) line(g, 'rgb(90,62,34)', 0, y, 15, y); }),
+  dark: pix([84, 58, 34], 8, 'dark', g => { for (const y of [3, 7, 11, 15]) line(g, 'rgb(54,36,20)', 0, y, 15, y); }),
+  quartz: pix([234, 230, 222], 6, 'quartz', g => { g.fillStyle = 'rgba(0,0,0,.12)'; g.fillRect(8, 0, 8, 8); g.fillRect(0, 8, 8, 8); }),
+  glow: pix([255, 214, 100], 22, 'glow', g => { outline(g, 'rgb(150,100,30)'); line(g, 'rgb(190,130,40)', 8, 0, 8, 15); line(g, 'rgb(190,130,40)', 0, 8, 15, 8); }),
+  iron: pix([196, 200, 206], 9, 'iron', g => outline(g, 'rgb(130,136,142)')),
+  steel: pix([78, 88, 102], 9, 'steel', g => outline(g, 'rgb(120,130,142)')),
+  wool: pix([178, 42, 42], 8, 'wool', g => outline(g, 'rgb(110,20,20)')),
+  leather: pix([122, 76, 40], 12, 'leather', g => { line(g, 'rgb(230,190,120)', 0, 8, 15, 8); outline(g, 'rgb(70,42,20)'); }),
+  leather2: pix([178, 132, 78], 12, 'leather2', g => { line(g, 'rgb(250,235,190)', 0, 8, 15, 8); outline(g, 'rgb(120,90,50)'); }),
+  nut: pix([222, 176, 62], 14, 'nut', g => { outline(g, 'rgb(150,105,30)'); line(g, 'rgb(255,235,150)', 8, 0, 8, 15); }),
+  cabinet: pix([70, 120, 150], 8, 'cab', g => outline(g, 'rgb(40,80,110)')),
+  floor: pix([150, 150, 156], 8, 'floor', g => { g.fillStyle = 'rgba(0,0,0,.12)'; g.fillRect(8, 0, 8, 8); g.fillRect(0, 8, 8, 8); }),
+};
+const GLOW = new Set(['glow']);
+function mat(tex, ts, tint, opacity) {
+  const o = {};
+  if (tex) { const t = TEX[tex].clone(); t.needsUpdate = true; if (ts) t.repeat.set(ts[0], ts[1]); o.map = t; }
+  if (tint) o.color = new THREE.Color(tint);
+  if (opacity != null) { o.transparent = true; o.opacity = opacity; o.depthWrite = false; }
+  return tex && GLOW.has(tex) ? new THREE.MeshBasicMaterial(o) : new THREE.MeshLambertMaterial(o);
+}
+
+// ─────────────── сцена ───────────────
+const canvas = $('gl');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#bfe3ff');
+scene.fog = new THREE.Fog('#b9d7f0', 38, 120);
+const camera = new THREE.PerspectiveCamera(70, 1, 0.05, 400);
+scene.add(new THREE.HemisphereLight('#ffffff', '#707888', 0.75));
+const sun = new THREE.DirectionalLight('#fff4e0', 0.55); sun.position.set(12, 30, 18); scene.add(sun);
+
+const BOX = new THREE.BoxGeometry(1, 1, 1);
+function block(pos, scale, tex, o = {}) {
+  const m = new THREE.Mesh(BOX, mat(tex, o.ts, o.tint, o.opacity));
+  m.position.set(...pos); m.scale.set(...scale);
+  if (o.rot) m.rotation.set(o.rot[0] * D2R, o.rot[1] * D2R, o.rot[2] * D2R);
+  (o.parent || scene).add(m);
+  return m;
+}
+// призма вдоль оси Z
+function prism(sides, r, len, tex, o = {}) {
+  const geo = new THREE.CylinderGeometry(r, r, len, sides, 1);
+  geo.rotateX(Math.PI / 2);
+  const m = new THREE.Mesh(geo, mat(tex, null, o.tint));
+  m.material.flatShading = true;
+  if (o.pos) m.position.set(...o.pos);
+  (o.parent || scene).add(m);
+  return m;
+}
+const pickables = [];
+function part(name, info, m) { m.userData.info = [name, info]; pickables.push(m); return m; }
+
+// ─────────────── зал ───────────────
+(function buildHall() {
+  const W = HALL * 2;
+  block([0, -0.6, 0], [240, 1, 240], 'grass', { ts: [240, 240] });
+  block([0, -0.5, 0], [W, 1, W], 'floor', { ts: [W, W] });
+  block([0, WALL_H / 2, HALL + .5], [W + 2, WALL_H, 1], 'brick', { ts: [W + 2, WALL_H] });
+  block([0, WALL_H / 2, -HALL - .5], [W + 2, WALL_H, 1], 'brick', { ts: [W + 2, WALL_H] });
+  block([HALL + .5, WALL_H / 2, 0], [1, WALL_H, W], 'brick', { ts: [W, WALL_H] });
+  block([-HALL - .5, WALL_H / 2, 0], [1, WALL_H, W], 'brick', { ts: [W, WALL_H] });
+  for (const [p, s] of [[[0, .6, HALL - .05], [W, 1.2, .3]], [[0, .6, -HALL + .05], [W, 1.2, .3]],
+                        [[HALL - .05, .6, 0], [.3, 1.2, W]], [[-HALL + .05, .6, 0], [.3, 1.2, W]]])
+    block(p, s, 'dark', { ts: [W / 2, 1] });
+  const ry = WALL_H + .5;
+  for (const [p, s, ts] of [[[0, ry, 16], [W + 2, 1, 18], [W, 18]], [[0, ry, -16], [W + 2, 1, 18], [W, 18]],
+                            [[16, ry, 0], [18, 1, 14], [18, 14]], [[-16, ry, 0], [18, 1, 14], [18, 14]]])
+    block(p, s, 'dark', { ts });
+  for (let k = -3; k <= 3; k++) for (const g of [-8.5, 8.5]) {
+    block([k * 3.2, ry - .9, g], [1.1, .7, 1.1], 'glow');
+    block([g, ry - .9, k * 3.2], [1.1, .7, 1.1], 'glow');
+  }
+  for (const x of [-20, -10, 10, 20]) for (const z of [-20, -10, 10, 20]) {
+    block([x, 4.5, z], [1.2, 9, 1.2], 'quartz', { ts: [1, 9] });
+    block([x, 9.2, z], [1.6, .6, 1.6], 'stone');
+    block([x, .25, z], [1.6, .5, 1.6], 'stone');
+    block([x, 5.5, z], [1.3, .5, 1.3], 'glow');
+  }
+  const off = HALL - 6;
+  block([0, .03, off], [W - 8, .06, 2.4], 'wool', { ts: [W - 8, 2] });
+  block([0, .03, -off], [W - 8, .06, 2.4], 'wool', { ts: [W - 8, 2] });
+  block([off, .03, 0], [2.4, .06, W - 8], 'wool', { ts: [2, W - 8] });
+  block([-off, .03, 0], [2.4, .06, W - 8], 'wool', { ts: [2, W - 8] });
+  block([0, PLATFORM_TOP / 2, 0], [22, PLATFORM_TOP, 22], 'quartz', { ts: [22, 22] });
+  block([0, PLATFORM_TOP / 2 - .001, 0], [22.6, PLATFORM_TOP * .6, 22.6], 'stone', { ts: [22, 2] });
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) block([sx * 10.6, PLATFORM_TOP + .5, sz * 10.6], [.7, 1, .7], 'glow');
+})();
+
+// облака
+const clouds = [];
+{ const r = rng('clouds');
+  for (let i = 0; i < 9; i++) clouds.push(block([r() * 90 - 45, 26 + r() * 8, r() * 60 - 30], [6 + r() * 6, .8, 4 + r() * 3], null, { tint: '#ffffff', opacity: .85 })); }
+
+// ─────────────── доски со слайдами ───────────────
+function wrap(g, text, maxW) {
+  const words = text.split(' '), out = []; let cur = '';
+  for (const w of words) { const t = cur ? cur + ' ' + w : w; if (g.measureText(t).width > maxW && cur) { out.push(cur); cur = w; } else cur = t; }
+  if (cur) out.push(cur);
+  return out;
+}
+function boardTexture(i) {
+  const c = document.createElement('canvas'); c.width = 1024; c.height = 692;
+  const g = c.getContext('2d');
+  g.fillStyle = '#0b1a2e'; g.fillRect(0, 0, c.width, c.height);
+  g.fillStyle = AMBER; g.font = '700 64px "Pixelify Sans", monospace'; g.textBaseline = 'top';
+  g.fillText(String(i + 1).padStart(2, '0'), 44, 34);
+  g.fillStyle = WHITE; g.font = '700 52px "PT Sans", Arial, sans-serif';
+  let y = 120;
+  for (const l of wrap(g, SLIDES[i][0], 940)) { g.fillText(l, 44, y); y += 58; }
+  y += 8; g.fillStyle = AMBER; g.fillRect(44, y, 936, 6); y += 26;
+  g.font = '30px "PT Sans", Arial, sans-serif'; g.fillStyle = '#dfe7ef';
+  for (const b of SLIDES[i][1]) {
+    const ls = wrap(g, b, 900);
+    if (y + ls.length * 36 > 620) break;
+    g.fillStyle = AMBER; g.fillRect(48, y + 12, 10, 10); g.fillStyle = '#dfe7ef';
+    for (const l of ls) { g.fillText(l, 74, y); y += 36; }
+    y += 8;
+  }
+  g.fillStyle = CYAN; g.font = '26px "PT Sans", Arial, sans-serif';
+  g.fillText('Подойдите ближе — слайд откроется на панели', 44, 640);
+  const t = new THREE.CanvasTexture(c); t.anisotropy = 4;
+  return t;
+}
+const boards = []; // {group, station:{x,z}, yaw, plane}
+function buildBoards() {
+  const walls = [
+    { fixed: ['z', HALL], yaw: 0, run: [-16, 8] },
+    { fixed: ['x', HALL], yaw: 90, run: [16, -8] },
+    { fixed: ['z', -HALL], yaw: 180, run: [16, -8] },
+    { fixed: ['x', -HALL], yaw: 270, run: [-16, 8] },
+  ];
+  let idx = 0;
+  for (const w of walls) for (let k = 0; k < 5; k++) {
+    const r = w.run[0] + w.run[1] * k;
+    let x = w.fixed[0] === 'z' ? r : w.fixed[1], z = w.fixed[0] === 'z' ? w.fixed[1] : r;
+    const a = w.yaw * D2R, fx = Math.sin(a), fz = Math.cos(a);
+    x -= fx * .55; z -= fz * .55;
+    const grp = new THREE.Group(); grp.position.set(x, BOARD_Y, z); grp.rotation.y = a + Math.PI; scene.add(grp);
+    block([0, 0, .05], [BOARD_W + .5, BOARD_H + .5, .4], 'dark', { parent: grp, ts: [BOARD_W / 1.5, BOARD_H / 1.5] });
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(BOARD_W, BOARD_H), new THREE.MeshBasicMaterial({ map: boardTexture(idx) }));
+    plane.position.z = .26; grp.add(plane);
+    for (const dx of [-2.4, 2.4]) block([dx, BOARD_H / 2 + 1, 0], [.8, .5, .8], 'glow', { parent: grp });
+    boards.push({ grp, plane, idx, station: { x: x - fx * STATION_DIST, z: z - fz * STATION_DIST }, yaw: w.yaw });
+    idx++;
+  }
+}
+buildBoards();
+// после загрузки шрифтов перерисовать доски
+if (document.fonts) document.fonts.ready.then(() => { for (const b of boards) { b.plane.material.map.dispose(); b.plane.material.map = boardTexture(b.idx); } });
+
+// подписи-спрайты
+function label(text, pos, colr, h, parent) {
+  const c = document.createElement('canvas'), g = c.getContext('2d');
+  g.font = '700 64px "Pixelify Sans", monospace';
+  c.width = Math.ceil(g.measureText(text).width) + 40; c.height = 96;
+  g.font = '700 64px "Pixelify Sans", monospace'; g.textBaseline = 'middle';
+  g.fillStyle = 'rgba(8,16,28,.72)'; g.fillRect(0, 0, c.width, c.height);
+  g.fillStyle = colr; g.fillText(text, 20, 50);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: true }));
+  s.scale.set(h * c.width / c.height, h, 1); s.position.set(...pos); parent.add(s);
+  return s;
+}
+
+// ─────────────── машина ДВ-1М (1 блок = 100 мм) ───────────────
+const parts = {}, discs = [];
+(function buildMachine() {
+  const M = new THREE.Group(); M.position.y = PLATFORM_TOP; scene.add(M); parts.machine = M;
+  const B = (p, s, t, o = {}) => block(p, s, t, { ...o, parent: M });
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) B([sx * 3.5, 3.6, sz * 2.95], [.4, 7.2, .4], 'iron');
+  for (const sz of [-1, 1]) { B([0, 7.2, sz * 2.95], [7.4, .35, .4], 'iron'); B([0, .3, sz * 2.95], [7.4, .35, .4], 'iron'); B([0, .75, sz * 2.95], [7.4, .9, .16], 'steel'); }
+  for (const sx of [-1, 1]) { B([sx * 3.5, 7.2, 0], [.4, .35, 5.9], 'iron'); B([sx * 3.5, .3, 0], [.4, .35, 5.9], 'iron'); }
+  B([0, .15, 0], [7.4, .3, 6], 'steel');
+
+  // рабочий барабан
+  const G = new THREE.Group(); G.position.set(0, 2.6, 0); M.add(G); parts.drum = G;
+  part('Вал рабочего барабана', 'Несёт набор дисков. Посадка дисков — по сборочному чертежу.', prism(8, .28, 5.8, 'iron', { parent: G }));
+  for (let i = 0; i < 10; i++) {
+    const d = prism(16, .95, .36, i % 2 ? 'leather2' : 'leather', { parent: G, pos: [0, 0, -1.8 + .4 * i] });
+    d.rotation.z = i * 30 * D2R;
+    part(`Диск рабочего барабана №${i + 1}`, 'РКМ-2 / РКМ-4. Ø190±2, отв. Ø60±1, толщина 5,7±0,7 мм. В комплекте барабана 200 дисков (на модели показано 10). Клавиша E в шаге «диски» отмечает диск как брак.', d);
+    d.userData.defect = false; discs.push(d);
+  }
+  parts.washer = part('Прижимная шайба (прокладка)', 'Снимается после гайки. Открывает доступ к набору дисков.', prism(16, .62, .12, 'iron', { parent: G, pos: [0, 0, 2.1] }));
+  parts.nut = part('Крепёжная гайка', 'Снимается ключом по размеру гайки. Затяжку проверить при сборке.', prism(6, .5, .42, 'nut', { parent: G, pos: [0, 0, 2.45] }));
+
+  // отбойный барабан Ø150
+  const beater = part('Отбойный барабан', 'Ø150 мм (не менее 145 мм после ремонта); 8 рядов лопаток. Ударами отделяет семена от волокна. Зазор до рабочего барабана 0,5–1,0 мм.',
+    prism(12, .75, 5.2, 'steel', { parent: M, pos: [-1.36, 3.74, 0] }));
+  const bladeMat = new THREE.MeshLambertMaterial({ color: '#c9ced6' });
+  for (let r = 0; r < 8; r++) { const a = r * 45 * D2R; for (const zz of [-2, -1, 0, 1, 2]) {
+    const b = new THREE.Mesh(BOX, bladeMat); b.scale.set(.14, .34, .5); b.position.set(Math.cos(a) * .86, Math.sin(a) * .86, zz); b.rotation.z = a; beater.add(b); } }
+  parts.beater = beater;
+
+  part('Неподвижный нож', 'Пружинная сталь: толщина 8 мм, высота 115 мм (минимум 55 мм после переточки). Зазор «отбойный барабан — нож» 0,5–1,5 мм.', B([-1.85, 2.66, 0], [1.9, .12, 4.4], 'iron', { rot: [0, 0, -4] }));
+  part('Передний козырёк', 'Зазор «отбойный барабан — козырёк» 0,5–2,0 мм (табл. 1 методички).', B([-2.05, 4.35, 0], [1.5, .1, 4.4], 'steel', { rot: [0, 0, 32] }));
+
+  // питатель
+  const pin = part('Колковый барабан питателя', 'Колки в шахматном порядке в 4 ряда со смещением 51±2 мм. Подаёт хлопок-сырец к рабочему барабану.', prism(8, .55, 4.6, 'steel', { parent: M, pos: [1.65, 4.9, 0] }));
+  const pegMat = new THREE.MeshLambertMaterial({ color: '#e6e9ee' });
+  for (let r = 0; r < 8; r++) { const a = (r * 45 + (r % 2 ? 22 : 0)) * D2R; for (const zz of [-1.8, -.6, .6, 1.8]) {
+    const b = new THREE.Mesh(BOX, pegMat); b.scale.set(.1, .34, .1); b.position.set(Math.cos(a) * .66, Math.sin(a) * .66, zz); b.rotation.z = a + Math.PI / 2; pin.add(b); } }
+  parts.pin = pin;
+  parts.rollers = [1.1, 2.2].map(x => part('Приёмный колковый валик', 'Два приёмных валика питателя. Привод питателя: двигатель постоянного тока, клиноременная передача, червячный редуктор. Магнитный валик улавливает металл.',
+    prism(10, .36, 4.6, 'iron', { parent: M, pos: [x, 6.5, 0] })));
+  for (const [p, s] of [[[.55, 8, 0], [.08, 2.6, 4.9]], [[2.75, 8, 0], [.08, 2.6, 4.9]], [[1.65, 8, 2.45], [2.2, 2.6, .08]], [[1.65, 8, -2.45], [2.2, 2.6, .08]]])
+    B(p, s, null, { tint: '#9fe8ff', opacity: .22 });
+  part('Сетчатая поверхность', 'Пропускает примеси; засорение сетки резко снижает производительность.', B([1.6, 3.62, 0], [2.5, .07, 4.4], null, { tint: '#d8dee6', opacity: .55, rot: [0, 0, 34] }));
+
+  part('Волокноотводящий канал', 'Износ стенок канала — причина наматывания волокна на барабан.', B([-3.05, 1.3, 0], [2.6, .1, 4.4], 'quartz', { rot: [0, 0, 32] }));
+  part('Семенной лоток', 'Сюда падают отделённые семена.', B([-.7, .55, 0], [2.4, .12, 4.4], 'steel'));
+
+  part('Электродвигатель', '4 двигателя переменного тока для рабочих органов, 1 — для питающих валиков.', B([4.6, .8, 0], [1.5, 1.2, 1.8], 'steel'));
+  const sh = prism(10, .3, .9, 'iron', { parent: M, pos: [3.6, .8, 0] }); sh.rotation.y = Math.PI / 2;
+  part('Шкаф управления', 'Автоматы В1–В3, переключатель В6; два пульта управления; ограждения с концевыми выключателями.', B([-5.6, 1.9, 1.4], [1, 3.6, 2.2], 'cabinet'));
+  ['#ff5555', '#55ff55', '#ffd24d'].forEach((c, i) => B([-5.08, 3 - i * .35, 1.4], [.06, .18, .18], null, { tint: c }));
+
+  label('ПИТАТЕЛЬ', [1.65, 10.6, 0], AMBER, .7, M);
+  label('РАБОЧИЙ БАРАБАН Ø190', [0, 1.5, 3.6], AMBER, .5, M);
+  label('ОТБОЙНЫЙ БАРАБАН Ø150', [-2.8, 6, 0], CYAN, .5, M);
+  label('НОЖ', [-3.4, 3.4, 0], GREEN, .5, M);
+  label('ВЫХОД ВОЛОКНА', [-4.9, .5, 0], WHITE, .4, M);
+  label('ДВ-1М', [0, 12.4, 0], AMBER, 1.6, M);
+  for (const sx of [-1, 1]) B([sx * 1.4, .35, 7.2], [.6, .7, 1.2], 'dark');
+})();
+
+// частицы: хлопок (белый) и семена (коричневые)
+const particles = [];
+{ const cot = new THREE.MeshLambertMaterial({ color: '#ffffff' }), sd = new THREE.MeshLambertMaterial({ color: '#6b3d1a' });
+  for (let i = 0; i < 46; i++) {
+    const seed = i % 4 === 0, p = new THREE.Mesh(BOX, seed ? sd : cot);
+    p.scale.setScalar(seed ? .16 : .2); p.visible = false;
+    p.userData = { seed, zoff: Math.random() * 3.6 - 1.8, wp: 0 };
+    parts.machine.add(p); particles.push(p);
+  } }
+function waypoints(seed) {
+  const w = [[1.65, 9.5], [1.65, 5.9], [1.3, 4.3], [.55, 3.75], [0, 3.62], [-.75, 3.2]];
+  return w.concat(seed ? [[-.9, 1.6], [-.7, .8]] : [[-1.5, 2.6], [-2.5, 1.7], [-3.6, .8]]);
+}
+
+// ─────────────── анимации (твины) ───────────────
+const tweens = [];
+const ease = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+function tween(obj, key, to, dur = 1.1) {
+  for (let i = tweens.length - 1; i >= 0; i--) if (tweens[i].obj === obj && tweens[i].key === key) tweens.splice(i, 1);
+  tweens.push({ obj, key, from: obj[key], to, t: 0, dur });
+}
+
+// ─────────────── состояние ───────────────
+let STEP = 0, running = false, technical = false, flying = false, panelOn = true, cur = -1;
+const player = { x: 0, y: 0, z: 0, vy: 0, yaw: 0, pitch: 0, grounded: true };
+
+function pose(step) {
+  const P = { g: [0, 2.6, 0], nut: 2.45, washer: 2.1, dy: 0, dz: discs.map((_, i) => -1.8 + .4 * i) };
+  if (step >= 1) P.g = [0, 2.4, 7.2];
+  if (step >= 2) P.nut = 5.2;
+  if (step >= 3) P.washer = 3.9;
+  if (step >= 4) { P.dy = 2.3; P.dz = discs.map((_, i) => -3.15 + .7 * i); }
+  return P;
+}
+function setStep(k) {
+  k = Math.max(0, Math.min(DISASSEMBLY.length - 1, k));
+  if (k === STEP) { flash(k === 0 ? 'Барабан уже собран' : 'Разборка завершена — сборка клавишей B', AMBER); return; }
+  STEP = k; if (STEP > 0) running = false;
+  const P = pose(k), G = parts.drum;
+  tween(G.position, 'x', P.g[0]); tween(G.position, 'y', P.g[1]); tween(G.position, 'z', P.g[2]);
+  tween(G.rotation, 'z', 0);
+  tween(parts.nut.position, 'z', P.nut); tween(parts.washer.position, 'z', P.washer);
+  if (k === 2) { parts.nut.rotation.z = 0; tween(parts.nut.rotation, 'z', 4 * Math.PI); }
+  else if (k < 2) tween(parts.nut.rotation, 'z', 0);
+  discs.forEach((d, i) => { tween(d.position, 'z', P.dz[i]); tween(d.position, 'y', P.dy); });
+  refreshSteps();
+  flash(`Шаг ${STEP}/${DISASSEMBLY.length - 1}: ${DISASSEMBLY[STEP][0]}`);
+}
+
+// ─────────────── HUD ───────────────
+const barEl = $('bar');
+SLIDES.forEach(() => barEl.appendChild(document.createElement('i')));
+const pips = $('st-pips'); DISASSEMBLY.slice(1).forEach(() => pips.appendChild(document.createElement('i')));
+function showSlide(i) {
+  if (i === cur) return; cur = i;
+  $('s-count').textContent = `СЛАЙД ${i + 1} / ${SLIDES.length}`;
+  $('s-title').textContent = SLIDES[i][0];
+  const ul = $('s-body'); ul.innerHTML = '';
+  for (const b of SLIDES[i][1]) { const li = document.createElement('li'); li.textContent = b; ul.appendChild(li); }
+  [...barEl.children].forEach((e, k) => e.className = k === i ? 'cur' : k < i ? 'done' : '');
+}
+function refreshSteps() {
+  const s = DISASSEMBLY[STEP];
+  $('st-head').textContent = `РАЗБОРКА · шаг ${STEP}/${DISASSEMBLY.length - 1}` + (running && STEP === 0 ? ' · МАШИНА РАБОТАЕТ' : '');
+  $('st-op').textContent = s[0]; $('st-part').textContent = s[1]; $('st-tool').textContent = s[2]; $('st-res').textContent = s[3];
+  [...pips.children].forEach((e, k) => e.classList.toggle('on', k < STEP));
+}
+let toastTimer, infoTimer;
+function flash(text, c = GREEN) {
+  const t = $('toast'); t.textContent = text; t.style.color = c;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.textContent = '', 3200);
+}
+function showInfo(name, text) {
+  $('i-title').textContent = name; $('i-body').textContent = text; $('info').hidden = false;
+  clearTimeout(infoTimer); infoTimer = setTimeout(() => $('info').hidden = true, 9000);
+}
+const HOT = [['N', 'След.', 'KeyN'], ['P', 'Пред.', 'KeyP'], ['C', 'Машина', 'KeyC'], ['R', 'Разбор.', 'KeyR'], ['B', 'Сборка', 'KeyB'],
+             ['M', 'Пуск', 'KeyM'], ['K', 'Хлопок', 'KeyK'], ['E', 'Осмотр', 'KeyE'], ['F', 'Полёт', 'KeyF'], ['Tab', 'Панель', 'Tab'], ['H', 'Помощь', 'KeyH']];
+const slots = {};
+for (const [k, d, code] of HOT) {
+  const b = document.createElement('button'); b.className = 'slot'; b.type = 'button'; b.title = `${d} (${k})`;
+  b.innerHTML = `<b>${k}</b><span>${d}</span>`;
+  b.addEventListener('click', e => { e.stopPropagation(); command(code); b.blur(); });
+  $('hotbar').appendChild(b); slots[k] = b;
+}
+function refreshSlots() {
+  slots.M.classList.toggle('on-g', running);
+  slots.F.classList.toggle('on-c', flying);
+  slots.K.classList.toggle('on-a', technical);
+}
+
+// ─────────────── перемещение ───────────────
+function groundAt(x, z) { return Math.abs(x) < 11 && Math.abs(z) < 11 ? PLATFORM_TOP : 0; }
+function blocked(x, z) {
+  if (Math.abs(x) > HALL - .7 || Math.abs(z) > HALL - .7) return true;
+  if (Math.abs(x) < 6.3 && Math.abs(z) < 3.5 && player.y < 7.6) return true; // корпус машины
+  for (const cx of [-20, -10, 10, 20]) for (const cz of [-20, -10, 10, 20]) if (Math.abs(x - cx) < 1.1 && Math.abs(z - cz) < 1.1 && player.y < 9) return true;
+  return false;
+}
+function goStation(i) {
+  i = ((i % boards.length) + boards.length) % boards.length;
+  const b = boards[i];
+  player.x = b.station.x; player.z = b.station.z; player.y = groundAt(player.x, player.z); player.vy = 0;
+  player.yaw = b.yaw * D2R; player.pitch = -4 * D2R;
+  cur = -1; showSlide(i);
+}
+function nearestBoard() {
+  const fx = Math.sin(player.yaw), fz = Math.cos(player.yaw);
+  let best = -1, bd = 1e9;
+  boards.forEach((b, i) => {
+    const vx = b.grp.position.x - player.x, vz = b.grp.position.z - player.z, d = Math.hypot(vx, vz);
+    if (d < 1e-3 || (vx * fx + vz * fz) / d < .57) return;
+    if (d < bd) { best = i; bd = d; }
+  });
+  return [best, bd];
+}
+
+// ─────────────── ввод ───────────────
+const keys = new Set();
+const ray = new THREE.Raycaster(); ray.far = 14;
+function aimed() {
+  ray.setFromCamera({ x: 0, y: 0 }, camera);
+  const hit = ray.intersectObjects(pickables, true)[0];
+  if (!hit) return null;
+  let o = hit.object; while (o && !o.userData.info) o = o.parent;
+  return o;
+}
+function inspect() {
+  const e = aimed();
+  if (!e) { flash('Наведите прицел на деталь машины', AMBER); return; }
+  const di = discs.indexOf(e);
+  if (di >= 0 && STEP === 4) {
+    e.userData.defect = !e.userData.defect;
+    e.material.color.set(e.userData.defect ? RED : '#ffffff');
+    const n = discs.filter(d => d.userData.defect).length;
+    flash(`Диск №${di + 1}: ${e.userData.defect ? 'БРАК — заменить' : 'годен'}   (отбраковано: ${n})`, e.userData.defect ? RED : GREEN);
+  }
+  showInfo(...e.userData.info);
+}
+function command(code) {
+  switch (code) {
+    case 'KeyN': goStation(cur >= 0 ? cur + 1 : 0); break;
+    case 'KeyP': goStation(cur >= 0 ? cur - 1 : 0); break;
+    case 'KeyC': player.x = 0; player.z = 19.5; player.y = PLATFORM_TOP; player.vy = 0; player.yaw = Math.PI; player.pitch = -3 * D2R; break;
+    case 'KeyR': setStep(STEP + 1); break;
+    case 'KeyB': setStep(STEP - 1); break;
+    case 'KeyM':
+      if (STEP > 0) flash('Сначала выполните сборку (клавиша B)', RED);
+      else { running = !running; flash(running ? 'Машина запущена' : 'Машина остановлена', running ? GREEN : AMBER); refreshSteps(); }
+      break;
+    case 'KeyK': technical = !technical;
+      flash(technical ? 'Технический хлопок: отбойный барабан 252 об/мин' : 'Семенной хлопок: отбойный барабан 315 об/мин', CYAN); break;
+    case 'KeyF': flying = !flying; player.vy = 0; flash('Режим полёта: ' + (flying ? 'вкл' : 'выкл'), CYAN); break;
+    case 'Tab': panelOn = !panelOn; $('slide').hidden = !panelOn; break;
+    case 'KeyH': $('help').hidden = !$('help').hidden; break;
+    case 'KeyE': inspect(); break;
+  }
+  refreshSlots();
+}
+const MOVE = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+addEventListener('keydown', e => {
+  if (e.target.closest && e.target.closest('input,textarea')) return;
+  if (MOVE.has(e.code)) { keys.add(e.code); e.preventDefault();
+    if (e.code === 'Space' && !flying && player.grounded) { player.vy = 7.5; player.grounded = false; } return; }
+  if (e.repeat) return;
+  if (['KeyN', 'KeyP', 'KeyC', 'KeyR', 'KeyB', 'KeyM', 'KeyK', 'KeyF', 'Tab', 'KeyH', 'KeyE'].includes(e.code)) { e.preventDefault(); command(e.code); }
+});
+addEventListener('keyup', e => keys.delete(e.code));
+addEventListener('blur', () => keys.clear());
+
+// обзор мышью: захват указателя, иначе перетаскивание
+let locked = false, drag = null;
+canvas.addEventListener('click', () => { if (!locked && canvas.requestPointerLock) { try { const p = canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (_) {} } });
+document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === canvas; });
+function look(dx, dy, k) {
+  player.yaw -= dx * k; player.pitch = Math.max(-1.5, Math.min(1.5, player.pitch - dy * k));
+}
+addEventListener('mousemove', e => { if (locked) look(e.movementX, e.movementY, .0022); });
+canvas.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse') document.body.classList.add('touch'); if (!locked) drag = { x: e.clientX, y: e.clientY, id: e.pointerId }; });
+addEventListener('pointermove', e => { if (drag && e.pointerId === drag.id && !locked) { look(e.clientX - drag.x, e.clientY - drag.y, .004); drag.x = e.clientX; drag.y = e.clientY; } });
+addEventListener('pointerup', e => { if (drag && e.pointerId === drag.id) drag = null; });
+if (matchMedia('(pointer: coarse)').matches) document.body.classList.add('touch');
+for (const b of document.querySelectorAll('#pad button')) {
+  const k = b.dataset.k;
+  b.addEventListener('pointerdown', e => { e.preventDefault(); keys.add(k); });
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) b.addEventListener(ev, () => keys.delete(k));
+}
+$('s-next').addEventListener('click', () => command('KeyN'));
+$('s-prev').addEventListener('click', () => command('KeyP'));
+$('h-close').addEventListener('click', () => { $('help').hidden = true; });
+
+// ─────────────── кадр ───────────────
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / h;
+  camera.fov = w < 700 ? 80 : 70; camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize); resize();
+
+let last = performance.now(), spawn = 0;
+function frame(now) {
+  const dt = Math.min(.05, (now - last) / 1000); last = now;
+  // движение
+  const sp = (keys.has('ControlLeft') || keys.has('ControlRight')) ? 12 : 7;
+  const fwd = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
+  const str = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
+  if (keys.has('ArrowLeft') && !keys.has('KeyA')) { player.yaw += 2 * dt; }
+  if (keys.has('ArrowRight') && !keys.has('KeyD')) { player.yaw -= 2 * dt; }
+  const fx = Math.sin(player.yaw), fz = Math.cos(player.yaw), rx = -fz, rz = fx;
+  const ax = keys.has('ArrowLeft') || keys.has('ArrowRight') ? 0 : str;
+  let mx = fx * fwd + rx * ax, mz = fz * fwd + rz * ax; const ml = Math.hypot(mx, mz);
+  if (ml > 0) { mx = mx / ml * sp * dt; mz = mz / ml * sp * dt;
+    if (!blocked(player.x + mx, player.z)) player.x += mx;
+    if (!blocked(player.x, player.z + mz)) player.z += mz; }
+  const gnd = groundAt(player.x, player.z);
+  if (flying) {
+    player.y += ((keys.has('Space') ? 1 : 0) - (keys.has('ShiftLeft') || keys.has('ShiftRight') ? 1 : 0)) * 9 * dt;
+    player.y = Math.max(gnd, Math.min(WALL_H + 20, player.y));
+  } else {
+    player.vy -= 22 * dt; player.y += player.vy * dt;
+    if (player.y <= gnd) { player.y = gnd; player.vy = 0; player.grounded = true; }
+  }
+  camera.position.set(player.x, player.y + EYE, player.z);
+  const cp = Math.cos(player.pitch);
+  camera.lookAt(player.x + fx * cp, player.y + EYE + Math.sin(player.pitch), player.z + fz * cp);
+
+  // твины
+  for (let i = tweens.length - 1; i >= 0; i--) {
+    const t = tweens[i]; t.t += dt / t.dur; const k = Math.min(1, t.t);
+    t.obj[t.key] = t.from + (t.to - t.from) * ease(k);
+    if (k >= 1) tweens.splice(i, 1);
+  }
+  // автослайд
+  const [bi, bd] = nearestBoard();
+  if (bi >= 0 && bd < READ_DIST) showSlide(bi); else if (cur < 0) showSlide(0);
+  $('steps').hidden = Math.hypot(player.x, player.z) > 17;
+  // прицел
+  const a = aimed();
+  $('look').textContent = a ? a.userData.info[0] + '  [E]' : '';
+  // вращение (замедлено для наглядности)
+  if (running && STEP === 0) {
+    const k = .35 * 6 * D2R * dt;
+    parts.drum.rotation.z += 270 * k;
+    parts.beater.rotation.z -= (technical ? 252 : 315) * k;
+    parts.pin.rotation.z += 120 * k;
+    parts.rollers.forEach((r, i) => r.rotation.z += 90 * k * (i ? -1 : 1));
+    spawn += dt;
+    for (const p of particles) {
+      const u = p.userData;
+      if (!p.visible) {
+        if (spawn > .05 && Math.random() < .1) { p.visible = true; u.wp = 0; u.wps = waypoints(u.seed);
+          p.position.set(u.wps[0][0] + Math.random() * .6 - .3, u.wps[0][1], u.zoff); spawn = 0; }
+        continue;
+      }
+      const [tx, ty] = u.wps[u.wp + 1];
+      const dx = tx - p.position.x, dy = ty - p.position.y, dist = Math.hypot(dx, dy);
+      if (dist < .18) { u.wp++; if (u.wp >= u.wps.length - 1) p.visible = false; continue; }
+      const s = (u.wp < 2 ? 3.2 : 2.4) * dt / dist;
+      p.position.x += dx * s; p.position.y += dy * s; p.rotation.z += Math.PI * dt;
+    }
+  } else for (const p of particles) p.visible = false;
+  for (const c of clouds) { c.position.x += dt * .8; if (c.position.x > 50) c.position.x = -50; }
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+// старт
+goStation(0);
+refreshSteps(); refreshSlots();
+requestAnimationFrame(frame);
+</script>
+
+</body>
+</html>
