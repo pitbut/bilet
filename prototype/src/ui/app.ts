@@ -8,6 +8,8 @@ import { BoardScene } from "./scene";
 
 export type Speed = "normal" | "fast" | "instant";
 const SPEED = { normal: { hop: 0.32, bot: 750 }, fast: { hop: 0.14, bot: 300 }, instant: { hop: 0, bot: 60 } };
+const CARDS_W = 230;
+const CARDS_ROW_H = 212;
 const fmt = (n: number) => `${Math.round(n).toLocaleString("ru-RU")}`;
 const PERS_NAME = { shark: "Акула", miser: "Скряга", gambler: "Игроман", trader: "Торгаш" };
 const BRANCH_TITLE: Record<BranchId, string> = { rent: "Аренда", income: "Доход", special: "Особая" };
@@ -39,7 +41,7 @@ export class App {
   private bar = h("div", { class: "bar" });
   private info = h("div", { class: "info" });
   private panel = h("div", { class: "panel" });
-  private sites = h("div", { class: "sites" });
+  private cards = h("div", { class: "cards" });
   private logBox = h("div", { class: "log" });
   private toasts = h("div", { class: "toasts" });
   private modal = h("div", { class: "modal hidden" });
@@ -51,18 +53,41 @@ export class App {
   private logLines: string[] = [];
   private rush = false;
   private fitLater: () => void = () => {};
+  private get portrait() { return this.root.clientWidth < this.root.clientHeight; }
+
+  /** Ставит столбец карточек справа (горизонтально) или лентой над панелью (вертикально). */
+  private placeCards() {
+    const H = this.root.clientHeight;
+    const top = this.bar.getBoundingClientRect().bottom + 6;
+    const panelTop = this.panel.getBoundingClientRect().top || H - 80;
+    const st = this.cards.style;
+    this.cards.classList.toggle("row", this.portrait);
+    const ps = this.panel.style;
+    if (this.portrait) {
+      Object.assign(ps, { left: "", right: "", transform: "", width: "" });
+      Object.assign(st, { top: "auto", left: "8px", right: "8px", width: "auto", bottom: `${H - panelTop + 6}px`, height: `${CARDS_ROW_H}px` });
+    } else {
+      // панель хода — слева от столбца карточек, столбец — во всю высоту справа
+      Object.assign(ps, { left: "8px", right: `${CARDS_W + 16}px`, transform: "none", width: "auto" });
+      Object.assign(st, { top: `${top}px`, left: "auto", right: "8px", width: `${CARDS_W}px`, bottom: "max(10px, env(safe-area-inset-bottom))", height: "auto" });
+    }
+    this.toasts.style.top = `${top}px`;
+  }
   private insure = false;
 
-  constructor(root: HTMLElement, private onExit: () => void) {
+  constructor(private root: HTMLElement, private onExit: () => void) {
     const stage = h("div", { class: "stage" });
     root.append(stage);
     this.scene = new BoardScene(stage);
-    this.ui = h("div", { class: "ui" }, this.bar, this.info, this.sites, this.logBox, this.panel, this.toasts, this.modal);
+    this.ui = h("div", { class: "ui" }, this.bar, this.info, this.cards, this.logBox, this.panel, this.toasts, this.modal);
     root.append(this.ui);
     this.scene.onCellClick = (i) => this.showCell(i);
     const measure = () => {
+      this.placeCards();
       this.scene.safeTop = this.bar.getBoundingClientRect().bottom + 6;
-      this.scene.safeBottom = Math.max(70, root.clientHeight - this.panel.getBoundingClientRect().top + 6);
+      const cardsTop = this.portrait ? this.cards.getBoundingClientRect().top : root.clientHeight;
+      this.scene.safeBottom = Math.max(70, root.clientHeight - Math.min(cardsTop, this.panel.getBoundingClientRect().top) + 6);
+      this.scene.safeRight = this.portrait ? 0 : CARDS_W + 16;
     };
     window.addEventListener("resize", () => { measure(); this.scene.fitView(); });
     this.fitLater = () => { measure(); this.scene.fitView(); };
@@ -121,6 +146,7 @@ export class App {
   }
 
   private doAction(a: Action) {
+    if (this.stepping) return; // идёт анимация — повторные нажатия игнорируем
     const r = act(this.s, this.s.current, a);
     if (!r.ok) this.toast(r.error ?? "Нельзя", "warn");
     void this.step();
@@ -197,8 +223,9 @@ export class App {
       button("☰", () => this.showMenu(), "small"),
     );
     this.logBox.replaceChildren(...this.logLines.map((l) => h("div", {}, l)));
-    this.renderSites();
+    this.renderCards();
     this.renderPanel();
+    this.placeCards();
   }
 
   private renderPanel() {
@@ -218,19 +245,10 @@ export class App {
       case "decide": {
         const pend = s.pending!;
         const c = BOARD[pend.cell];
-        if (pend.kind === "buy") {
-          title.append(h("div", { class: "sub" }, `«${c.name}» свободна. ${c.industry ? INDUSTRIES[c.industry].name + " · " : ""}базовая аренда ${c.baseRent ?? "по кубикам"}`));
-          row.append(
-            button(`Купить за ${c.price}`, () => this.doAction({ t: "buy" }), cur.money >= c.price! ? "primary" : "disabled"),
-            button("На аукцион", () => this.doAction({ t: "decline" })),
-          );
-        } else if (pend.kind === "rent") {
-          title.append(h("div", { class: "sub" }, `Аренда «${c.name}» → ${s.players[pend.owner].name}: ${fmt(pend.amount)} млн ₽`));
-          row.append(
-            button(`Заплатить ${fmt(pend.amount)}`, () => this.doAction({ t: "payRent" }), "primary"),
-            button("Отработать (пропуск хода)", () => this.doAction({ t: "workOff" })),
-          );
-        }
+        const where = this.portrait ? "ниже" : "справа";
+        title.append(h("div", { class: "sub" }, pend.kind === "buy"
+          ? `«${c.name}» свободна — тапните по карточке ${where}, чтобы купить`
+          : `Аренда «${c.name}» — тапните по карточке ${where}, чтобы заплатить`));
         break;
       }
       case "casino":
@@ -252,36 +270,94 @@ export class App {
     p.replaceChildren(title, row);
   }
 
-  /** Стройки игрока-человека с кнопками тапа (во время чужих ходов). */
-  private renderSites() {
-    const s = this.s;
-    const me = this.soloHuman;
-    if (!me || me.bankrupt) { this.sites.replaceChildren(); return; }
-    const mine = Object.entries(s.props).filter(([, p]) => p.owner === me.id && p.construction);
-    if (!mine.length) { this.sites.replaceChildren(); return; }
-    const canTap = s.current !== me.id && s.phase !== "gameover";
-    this.sites.replaceChildren(
-      h("div", { class: "sites-head" }, canTap ? `Бригада: ${me.energy} тапов` : "Стройки (тапать — в чужой ход)"),
-      ...mine.map(([i, p]) => {
-        const c = p.construction!;
-        const bar = h("div", { class: "prog" }, h("div", { style: `width:${Math.min(100, c.progress)}%` }));
-        const el = h("div", { class: `site${canTap && me.energy > 0 ? " tappable" : ""}` },
-          h("div", { class: "site-name" }, `${BOARD[+i].name} → ур. ${c.target}`), bar,
-          h("div", { class: "site-pct" }, `${Math.floor(Math.min(100, c.progress))}%`));
-        if (canTap) {
-          el.addEventListener("pointerdown", (e) => {
-            e.preventDefault();
-            const r = act(s, me.id, { t: "tap", cell: +i });
-            if (!r.ok) return;
-            el.classList.remove("pop"); void el.offsetWidth; el.classList.add("pop");
-            const done = s.props[+i].construction === null;
-            if (done) void this.step(); else this.renderSites();
-            void this.scene.sync(s);
-          });
-        }
-        return el;
-      }),
-    );
+  /** Столбец карточек справа: клетка, где стоит игрок (по ней тапают, чтобы купить или заплатить), и клетки игрока со стройками. */
+  private renderCards() {
+    const s = this.s, cur = s.players[s.current];
+    const kids: Node[] = [];
+    if (s.phase !== "gameover" && !cur.bankrupt && !this.waitingPass) kids.push(this.hereCard());
+    const me = this.soloHuman ?? (!cur.bot ? cur : undefined);
+    if (me && !me.bankrupt) {
+      const mine = Object.entries(s.props).filter(([, p]) => p.owner === me.id).map(([i]) => +i)
+        .sort((a, b) => Number(!!s.props[b].construction) - Number(!!s.props[a].construction) || a - b);
+      const canTap = s.cfg.mode === "solo" && s.current !== me.id && s.phase !== "gameover";
+      if (mine.length) {
+        const building = mine.some((i) => s.props[i].construction);
+        kids.push(h("div", { class: "cards-head" }, building && canTap ? `Ваши клетки · бригада: ${me.energy} тапов` : "Ваши клетки"));
+      }
+      for (const i of mine) kids.push(this.ownedCard(me.id, i, canTap));
+    }
+    this.cards.replaceChildren(...kids);
+  }
+
+  private cardShell(i: number, cls: string) {
+    const c = BOARD[i];
+    const color = c.industry ? INDUSTRIES[c.industry].color : "#8a9199";
+    return h("div", { class: `ccard ${cls}` }, h("div", { class: "band", style: `background:${color}` }));
+  }
+
+  private hereCard() {
+    const s = this.s, cur = s.players[s.current], c = BOARD[cur.pos], p = s.props[cur.pos];
+    const pend = s.pending;
+    const human = !cur.bot;
+    const deciding = human && s.phase === "decide" && pend && (pend.kind === "buy" || pend.kind === "rent") && pend.cell === cur.pos;
+    const el = this.cardShell(cur.pos, `here${deciding ? " act" : ""}`);
+    const body = h("div", { class: "cbody" },
+      h("div", { class: "eyebrow" }, human ? (s.cfg.mode === "solo" ? "Вы здесь" : `${cur.name} здесь`) : `${cur.name} здесь`),
+      h("div", { class: "cname" }, c.name));
+    if (c.industry) body.append(h("div", { class: "cmeta" }, `${INDUSTRIES[c.industry].name} · цена ${c.price}`));
+    else if (c.price) body.append(h("div", { class: "cmeta" }, `Цена ${c.price}`));
+    if (p?.owner !== null && p?.owner !== undefined) {
+      body.append(h("div", { class: "cmeta" }, h("span", { class: "dot", style: `background:${s.players[p.owner].color}` }),
+        ` ${s.players[p.owner].name}${p.level ? ` · ур. ${p.level}` : ""} · аренда ${fmt(rentFor(s, cur.pos))}`));
+    }
+    el.append(body);
+    if (deciding && pend) {
+      if (pend.kind === "buy") {
+        const can = cur.money >= c.price!;
+        body.append(h("div", { class: "tapzone" }, can ? `Тапните — купить за ${c.price}` : `Не хватает: нужно ${c.price}`));
+        if (can) el.addEventListener("click", () => this.doAction({ t: "buy" }));
+        body.append(button("На аукцион", () => this.doAction({ t: "decline" }), "small ghost"));
+      } else {
+        body.append(h("div", { class: "tapzone" }, `Тапните — заплатить ${fmt(pend.amount)} → ${s.players[pend.owner].name}`));
+        el.addEventListener("click", () => this.doAction({ t: "payRent" }));
+        body.append(button("Отработать (пропуск хода)", () => this.doAction({ t: "workOff" }), "small ghost"));
+      }
+    }
+    return el;
+  }
+
+  private ownedCard(pid: number, i: number, canTap: boolean) {
+    const s = this.s, c = BOARD[i], p = s.props[i];
+    const me = s.players[pid];
+    const site = p.construction;
+    const tappable = !!site && canTap && me.energy > 0;
+    const el = this.cardShell(i, `mini${tappable ? " tappable" : ""}${s.players[s.current].pos === i && s.current !== pid ? " visited" : ""}`);
+    const status = site ? `стройка → ур. ${site.target}` : p.mortgaged ? "в залоге" : p.level ? `ур. ${p.level}` : "участок";
+    const body = h("div", { class: "cbody" },
+      h("div", { class: "crow" }, h("b", {}, c.name), h("span", { class: "muted" }, status)),
+      h("div", { class: "cmeta" }, `аренда ${fmt(rentFor(s, i))}`));
+    if (site) {
+      body.append(h("div", { class: "prog" }, h("div", { style: `width:${Math.min(100, site.progress)}%` })),
+        h("div", { class: "cmeta" }, tappable ? `${Math.floor(Math.min(100, site.progress))}% · тапайте!` : `${Math.floor(Math.min(100, site.progress))}%`));
+    }
+    el.append(body);
+    if (tappable) {
+      el.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        const r = act(s, pid, { t: "tap", cell: i });
+        if (!r.ok) return;
+        const done = s.props[i].construction === null;
+        if (done) { void this.step(); return; }
+        this.renderCards();
+        const fresh = [...this.cards.querySelectorAll(".ccard.mini")].find((n) => n.getAttribute("data-cell") === String(i));
+        fresh?.classList.add("pop");
+        void this.scene.sync(s);
+      });
+    } else {
+      el.addEventListener("click", () => this.showCell(i));
+    }
+    el.setAttribute("data-cell", String(i));
+    return el;
   }
 
   // ---------- Окна ----------

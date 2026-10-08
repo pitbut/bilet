@@ -83,6 +83,7 @@ export class BoardScene {
   hopTime = 0.32;
   safeTop = 56;
   safeBottom = 80;
+  safeRight = 0;
   private home: { target: THREE.Vector3; pos: THREE.Vector3 } | null = null;
   onCellClick?: (i: number) => void;
 
@@ -162,8 +163,9 @@ export class BoardScene {
 
   /** Подбирает дистанцию и центр камеры, чтобы поле целиком помещалось между верхней и нижней панелями. */
   fitView() {
-    const h = Math.max(1, this.host.clientHeight);
+    const h = Math.max(1, this.host.clientHeight), w = Math.max(1, this.host.clientWidth);
     const top = 1 - (2 * this.safeTop) / h, bottom = -1 + (2 * this.safeBottom) / h;
+    const left = -0.97, right = 0.97 - (2 * this.safeRight) / w;
     const e = 5 * S + 1.1 + LABEL_DEPTH + 0.2;
     const pts = [[-e, 0, e], [e, 0, e], [-e, 1.6, -e], [e, 1.6, -e], [-e, 0, -e], [e, 0, -e]].map((p) => new THREE.Vector3(...p));
     const polar = this.camera.aspect >= 1.2 ? 0.62 : 0.5; // наклон камеры от вертикали
@@ -187,7 +189,7 @@ export class BoardScene {
       for (let k = 0; k < 30; k++) {
         dist = (lo + hi) / 2;
         const r = extent(dist);
-        if (r.minX >= -0.97 && r.maxX <= 0.97 && r.maxY - r.minY <= top - bottom) hi = dist; else lo = dist;
+        if (r.maxX - r.minX <= right - left && r.maxY - r.minY <= top - bottom) hi = dist; else lo = dist;
       }
       dist = hi;
     };
@@ -199,6 +201,13 @@ export class BoardScene {
         target.z = (lo + hi) / 2;
         const r = extent(dist);
         if ((r.maxY + r.minY) / 2 < (top + bottom) / 2) lo = target.z; else hi = target.z;
+      }
+      // и посередине по горизонтали между левым краем и столбцом карточек
+      lo = -20; hi = 20;
+      for (let k = 0; k < 30; k++) {
+        target.x = (lo + hi) / 2;
+        const r = extent(dist);
+        if ((r.maxX + r.minX) / 2 > (left + right) / 2) lo = target.x; else hi = target.x;
       }
     }
     fitDist();
