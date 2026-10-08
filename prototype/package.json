@@ -10,7 +10,8 @@
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "simulate": "tsx scripts/simulate.ts"
+    "simulate": "tsx scripts/simulate.ts",
+    "artifact": "npm run build && node scripts/make-artifact.mjs"
   },
   "dependencies": {
     "three": "^0.169.0"

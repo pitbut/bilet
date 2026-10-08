@@ -1,0 +1,134 @@
+:root {
+  --bg: #1d2a33; --card: rgba(255, 255, 255, 0.94); --ink: #1f2328; --muted: #67707a;
+  --accent: #c62828; --good: #2e7d32; --warn: #ef6c00; --line: #d9d4c7;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--ink);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; overscroll-behavior: none; }
+#app { position: fixed; inset: 0; }
+button {
+  font: inherit; font-size: 15px; border: 1px solid var(--line); background: #fff; color: var(--ink);
+  border-radius: 10px; padding: 10px 14px; min-height: 44px; cursor: pointer; touch-action: manipulation;
+}
+button:active { transform: translateY(1px); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button.ghost { background: transparent; }
+button.disabled, button:disabled { opacity: 0.45; pointer-events: none; }
+button.red { background: #c62828; color: #fff; border-color: #c62828; }
+button.black { background: #222; color: #fff; border-color: #222; }
+button.small { min-height: 36px; padding: 4px 12px; }
+.muted { color: var(--muted); }
+.tiny { font-size: 12px; }
+
+/* стартовый экран */
+.setup {
+  position: absolute; inset: 0; overflow: auto; padding: 24px 16px 40px; color: #f3efe6;
+  background: radial-gradient(circle at 50% 0%, #34495e, #141c22 70%);
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+}
+.setup h1 { font: 800 52px Georgia, serif; letter-spacing: 4px; color: #e8c15a; margin: 8px 0 0; }
+.setup .muted { color: #b8c2cc; margin: 0 0 6px; text-align: center; }
+.field { width: min(560px, 100%); }
+.label { font-size: 13px; color: #b8c2cc; margin-bottom: 6px; }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg button { flex: 1 1 auto; background: rgba(255, 255, 255, 0.08); color: #f3efe6; border-color: rgba(255, 255, 255, 0.15); }
+.seg button.on { background: #e8c15a; color: #1d1d1d; border-color: #e8c15a; font-weight: 600; }
+.names { display: flex; flex-wrap: wrap; gap: 6px; }
+.names input { flex: 1 1 120px; min-height: 44px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.2); background: rgba(255, 255, 255, 0.08); color: #fff; padding: 0 12px; font: inherit; }
+.names button { background: rgba(255, 255, 255, 0.08); color: #fff; width: 48px; }
+button.big { width: min(560px, 100%); font-size: 18px; min-height: 54px; margin-top: 8px; }
+
+/* игра */
+.stage { position: absolute; inset: 0; }
+.ui { position: absolute; inset: 0; pointer-events: none; }
+.ui > * { pointer-events: auto; }
+.bar {
+  position: absolute; top: max(8px, env(safe-area-inset-top)); left: 8px; right: 190px;
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.chip {
+  position: relative; display: flex; align-items: center; gap: 6px; background: var(--card);
+  border-radius: 999px; padding: 4px 10px 4px 6px; font-size: 13px; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  border: 2px solid transparent;
+}
+.chip.current { border-color: #e8c15a; }
+.chip.out { opacity: 0.4; text-decoration: line-through; }
+.chip .money { font-weight: 700; font-variant-numeric: tabular-nums; }
+.dot { width: 14px; height: 14px; border-radius: 50%; display: inline-block; flex: none; border: 1px solid rgba(0, 0, 0, 0.2); }
+.float { position: absolute; right: 6px; top: -14px; font-weight: 700; font-size: 13px; animation: up 1.4s ease-out forwards; }
+.float.plus { color: var(--good); } .float.minus { color: var(--accent); }
+@keyframes up { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-16px); } }
+.info {
+  position: absolute; top: max(8px, env(safe-area-inset-top)); right: 8px; display: flex; align-items: center; gap: 6px;
+  background: var(--card); border-radius: 12px; padding: 4px 4px 4px 10px; font-size: 13px; font-weight: 600;
+}
+.panel {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: max(10px, env(safe-area-inset-bottom));
+  width: min(640px, calc(100% - 16px)); background: var(--card); border-radius: 16px; padding: 10px 12px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
+}
+.panel:empty { display: none; }
+.turn { font-weight: 600; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+.turn .sub { flex-basis: 100%; font-weight: 400; color: var(--muted); font-size: 14px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.row > button { flex: 1 1 auto; }
+.hint { color: var(--muted); text-align: center; padding: 4px; }
+.log {
+  position: absolute; left: 8px; bottom: 120px; width: min(300px, 40%); font-size: 12px; color: #fff;
+  text-shadow: 0 1px 2px #000; pointer-events: none;
+}
+.log div { margin-top: 2px; }
+.toasts { position: absolute; top: 56px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: center; width: min(520px, calc(100% - 16px)); pointer-events: none; }
+.toast { background: rgba(20, 24, 28, 0.88); color: #fff; padding: 8px 14px; border-radius: 10px; font-size: 14px; text-align: center; animation: fade 0.25s; }
+.toast.good { background: rgba(46, 125, 50, 0.95); }
+.toast.warn { background: rgba(198, 40, 40, 0.95); }
+.toast.card { background: #fff8e1; color: #3e2b00; border: 2px solid #e8c15a; font-weight: 600; }
+@keyframes fade { from { opacity: 0; transform: translateY(-6px); } }
+
+/* стройки и тапы */
+.sites { position: absolute; right: 8px; top: 56px; width: min(220px, 42%); display: flex; flex-direction: column; gap: 6px; }
+.sites-head { background: #e8c15a; color: #222; font-weight: 700; font-size: 13px; padding: 6px 10px; border-radius: 10px; }
+.site { background: var(--card); border-radius: 12px; padding: 8px 10px; font-size: 13px; user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+.site.tappable { border: 2px solid #e8c15a; cursor: pointer; }
+.site.pop { animation: pop 0.12s; }
+@keyframes pop { 50% { transform: scale(0.95); } }
+.site-name { font-weight: 600; }
+.site-pct { font-size: 12px; color: var(--muted); }
+.prog { height: 10px; background: #eee; border-radius: 6px; overflow: hidden; margin: 4px 0; }
+.prog div { height: 100%; background: linear-gradient(90deg, #f2c234, #ef6c00); }
+
+/* окна */
+.modal { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; padding: 12px; }
+.modal.hidden { display: none; }
+.sheet { position: relative; background: #fff; border-radius: 16px; padding: 16px; width: min(640px, 100%); max-height: 100%; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.sheet h2 { margin: 0 40px 0 0; font-size: 20px; }
+.sheet h3 { margin: 6px 0 0; font-size: 15px; }
+.sheet .close { position: absolute; right: 10px; top: 10px; min-height: 36px; padding: 4px 12px; }
+.sheet input[type="range"] { width: 100%; }
+.list { display: flex; flex-direction: column; gap: 8px; }
+.item { border: 1px solid var(--line); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.item-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.branch { flex: 1 1 160px; display: flex; flex-direction: column; gap: 4px; }
+.branch button { width: 100%; }
+label { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+.pass { position: absolute; inset: 0; background: #141c22; color: #fff; display: flex; align-items: center; justify-content: center; text-align: center; z-index: 5; cursor: pointer; }
+.pass h1 { font-size: 40px; margin: 0 0 8px; color: #e8c15a; }
+.pass .muted { color: #9aa5b1; }
+
+@media (max-height: 480px) {
+  .log { display: none; }
+  .panel { padding: 6px 8px; width: min(560px, calc(100% - 16px)); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .turn { margin: 0; font-size: 13px; flex: 1 1 180px; }
+  .turn .sub { font-size: 12px; }
+  .panel .row { flex: 2 1 260px; gap: 6px; }
+  button { min-height: 40px; padding: 6px 10px; font-size: 14px; }
+  .chip { font-size: 12px; padding: 2px 8px 2px 4px; }
+  .sites { top: 60px; }
+}
+
+@media (max-width: 600px) {
+  .log { display: none; }
+  .toasts { top: auto; bottom: 150px; }
+  .sites { top: auto; bottom: 150px; right: 8px; }
+}
