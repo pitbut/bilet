@@ -1,0 +1,920 @@
+[
+ {
+  "id": "agro_rent_1",
+  "file": "industries/agro/agro_rent_1.glb",
+  "category": "industry",
+  "industry": "agro",
+  "industryName": "Агро",
+  "branch": "rent",
+  "branchName": "Ферма → Агрохолдинг",
+  "level": 1,
+  "triangles": 176
+ },
+ {
+  "id": "agro_rent_2",
+  "file": "industries/agro/agro_rent_2.glb",
+  "category": "industry",
+  "industry": "agro",
+  "industryName": "Агро",
+  "branch": "rent",
+  "branchName": "Ферма → Агрохолдинг",
+  "level": 2,
+  "triangles": 556
+ },
+ {
+  "id": "agro_rent_3",
+  "file": "industries/agro/agro_rent_3.glb",
+  "category": "industry",
+  "industry": "agro",
+  "industryName": "Агро",
+  "branch": "rent",
+  "branchName": "Ферма → Агрохолдинг",
+  "level": 3,
+  "triangles": 960
+ },
+ {
+  "id": "agro_income_1",
+  "file": "industries/agro/agro_income_1.glb",
+  "category": "industry",
+  "industry": "agro",
+  "industryName": "Агро",
+  "branch": "income",
+  "branchName": "Элеватор",
+  "level": 1,
+  "triangles": 324
+ },
+ {
+  "id": "agro_income_2",
+  "file": "industries/agro/agro_income_2.glb",
+  "category": "industry",
+  "industry": "agro",
+  "industryName": "Агро",
+  "branch": "income",
+  "branchName": "Элеватор",
+  "level": 2,
+  "triangles": 840
+ },
+ {
+  "id": "agro_income_3",
+  "file": "industries/agro/agro_income_3.glb",
+  "category": "industry",
+  "industry": "agro",
+  "industryName": "Агро",
+  "branch": "income",
+  "branchName": "Элеватор",
+  "level": 3,
+  "triangles": 1120
+ },
+ {
+  "id": "agro_special_1",
+  "file": "industries/agro/agro_special_1.glb",
+  "category": "industry",
+  "industry": "agro",
+  "industryName": "Агро",
+  "branch": "special",
+  "branchName": "Экспорт зерна",
+  "level": 1,
+  "triangles": 300
+ },
+ {
+  "id": "agro_special_2",
+  "file": "industries/agro/agro_special_2.glb",
+  "category": "industry",
+  "industry": "agro",
+  "industryName": "Агро",
+  "branch": "special",
+  "branchName": "Экспорт зерна",
+  "level": 2,
+  "triangles": 396
+ },
+ {
+  "id": "agro_special_3",
+  "file": "industries/agro/agro_special_3.glb",
+  "category": "industry",
+  "industry": "agro",
+  "industryName": "Агро",
+  "branch": "special",
+  "branchName": "Экспорт зерна",
+  "level": 3,
+  "triangles": 432
+ },
+ {
+  "id": "forest_rent_1",
+  "file": "industries/forest/forest_rent_1.glb",
+  "category": "industry",
+  "industry": "forest",
+  "industryName": "Лес и бумага",
+  "branch": "rent",
+  "branchName": "Лесопилка → ЦБК",
+  "level": 1,
+  "triangles": 388
+ },
+ {
+  "id": "forest_rent_2",
+  "file": "industries/forest/forest_rent_2.glb",
+  "category": "industry",
+  "industry": "forest",
+  "industryName": "Лес и бумага",
+  "branch": "rent",
+  "branchName": "Лесопилка → ЦБК",
+  "level": 2,
+  "triangles": 700
+ },
+ {
+  "id": "forest_rent_3",
+  "file": "industries/forest/forest_rent_3.glb",
+  "category": "industry",
+  "industry": "forest",
+  "industryName": "Лес и бумага",
+  "branch": "rent",
+  "branchName": "Лесопилка → ЦБК",
+  "level": 3,
+  "triangles": 1028
+ },
+ {
+  "id": "forest_income_1",
+  "file": "industries/forest/forest_income_1.glb",
+  "category": "industry",
+  "industry": "forest",
+  "industryName": "Лес и бумага",
+  "branch": "income",
+  "branchName": "Мебельная фабрика",
+  "level": 1,
+  "triangles": 216
+ },
+ {
+  "id": "forest_income_2",
+  "file": "industries/forest/forest_income_2.glb",
+  "category": "industry",
+  "industry": "forest",
+  "industryName": "Лес и бумага",
+  "branch": "income",
+  "branchName": "Мебельная фабрика",
+  "level": 2,
+  "triangles": 476
+ },
+ {
+  "id": "forest_income_3",
+  "file": "industries/forest/forest_income_3.glb",
+  "category": "industry",
+  "industry": "forest",
+  "industryName": "Лес и бумага",
+  "branch": "income",
+  "branchName": "Мебельная фабрика",
+  "level": 3,
+  "triangles": 668
+ },
+ {
+  "id": "forest_special_1",
+  "file": "industries/forest/forest_special_1.glb",
+  "category": "industry",
+  "industry": "forest",
+  "industryName": "Лес и бумага",
+  "branch": "special",
+  "branchName": "Стройматериалы",
+  "level": 1,
+  "triangles": 324
+ },
+ {
+  "id": "forest_special_2",
+  "file": "industries/forest/forest_special_2.glb",
+  "category": "industry",
+  "industry": "forest",
+  "industryName": "Лес и бумага",
+  "branch": "special",
+  "branchName": "Стройматериалы",
+  "level": 2,
+  "triangles": 528
+ },
+ {
+  "id": "forest_special_3",
+  "file": "industries/forest/forest_special_3.glb",
+  "category": "industry",
+  "industry": "forest",
+  "industryName": "Лес и бумага",
+  "branch": "special",
+  "branchName": "Стройматериалы",
+  "level": 3,
+  "triangles": 1032
+ },
+ {
+  "id": "metal_rent_1",
+  "file": "industries/metal/metal_rent_1.glb",
+  "category": "industry",
+  "industry": "metal",
+  "industryName": "Металлургия",
+  "branch": "rent",
+  "branchName": "Литейный цех → Меткомбинат",
+  "level": 1,
+  "triangles": 164
+ },
+ {
+  "id": "metal_rent_2",
+  "file": "industries/metal/metal_rent_2.glb",
+  "category": "industry",
+  "industry": "metal",
+  "industryName": "Металлургия",
+  "branch": "rent",
+  "branchName": "Литейный цех → Меткомбинат",
+  "level": 2,
+  "triangles": 332
+ },
+ {
+  "id": "metal_rent_3",
+  "file": "industries/metal/metal_rent_3.glb",
+  "category": "industry",
+  "industry": "metal",
+  "industryName": "Металлургия",
+  "branch": "rent",
+  "branchName": "Литейный цех → Меткомбинат",
+  "level": 3,
+  "triangles": 472
+ },
+ {
+  "id": "metal_income_1",
+  "file": "industries/metal/metal_income_1.glb",
+  "category": "industry",
+  "industry": "metal",
+  "industryName": "Металлургия",
+  "branch": "income",
+  "branchName": "Прокатный стан",
+  "level": 1,
+  "triangles": 192
+ },
+ {
+  "id": "metal_income_2",
+  "file": "industries/metal/metal_income_2.glb",
+  "category": "industry",
+  "industry": "metal",
+  "industryName": "Металлургия",
+  "branch": "income",
+  "branchName": "Прокатный стан",
+  "level": 2,
+  "triangles": 352
+ },
+ {
+  "id": "metal_income_3",
+  "file": "industries/metal/metal_income_3.glb",
+  "category": "industry",
+  "industry": "metal",
+  "industryName": "Металлургия",
+  "branch": "income",
+  "branchName": "Прокатный стан",
+  "level": 3,
+  "triangles": 524
+ },
+ {
+  "id": "metal_special_1",
+  "file": "industries/metal/metal_special_1.glb",
+  "category": "industry",
+  "industry": "metal",
+  "industryName": "Металлургия",
+  "branch": "special",
+  "branchName": "Поставщик стали",
+  "level": 1,
+  "triangles": 132
+ },
+ {
+  "id": "metal_special_2",
+  "file": "industries/metal/metal_special_2.glb",
+  "category": "industry",
+  "industry": "metal",
+  "industryName": "Металлургия",
+  "branch": "special",
+  "branchName": "Поставщик стали",
+  "level": 2,
+  "triangles": 168
+ },
+ {
+  "id": "metal_special_3",
+  "file": "industries/metal/metal_special_3.glb",
+  "category": "industry",
+  "industry": "metal",
+  "industryName": "Металлургия",
+  "branch": "special",
+  "branchName": "Поставщик стали",
+  "level": 3,
+  "triangles": 240
+ },
+ {
+  "id": "auto_rent_1",
+  "file": "industries/auto/auto_rent_1.glb",
+  "category": "industry",
+  "industry": "auto",
+  "industryName": "Автопром",
+  "branch": "rent",
+  "branchName": "Автозавод → Конвейер",
+  "level": 1,
+  "triangles": 380
+ },
+ {
+  "id": "auto_rent_2",
+  "file": "industries/auto/auto_rent_2.glb",
+  "category": "industry",
+  "industry": "auto",
+  "industryName": "Автопром",
+  "branch": "rent",
+  "branchName": "Автозавод → Конвейер",
+  "level": 2,
+  "triangles": 724
+ },
+ {
+  "id": "auto_rent_3",
+  "file": "industries/auto/auto_rent_3.glb",
+  "category": "industry",
+  "industry": "auto",
+  "industryName": "Автопром",
+  "branch": "rent",
+  "branchName": "Автозавод → Конвейер",
+  "level": 3,
+  "triangles": 1140
+ },
+ {
+  "id": "auto_income_1",
+  "file": "industries/auto/auto_income_1.glb",
+  "category": "industry",
+  "industry": "auto",
+  "industryName": "Автопром",
+  "branch": "income",
+  "branchName": "Дилерская сеть",
+  "level": 1,
+  "triangles": 692
+ },
+ {
+  "id": "auto_income_2",
+  "file": "industries/auto/auto_income_2.glb",
+  "category": "industry",
+  "industry": "auto",
+  "industryName": "Автопром",
+  "branch": "income",
+  "branchName": "Дилерская сеть",
+  "level": 2,
+  "triangles": 1020
+ },
+ {
+  "id": "auto_income_3",
+  "file": "industries/auto/auto_income_3.glb",
+  "category": "industry",
+  "industry": "auto",
+  "industryName": "Автопром",
+  "branch": "income",
+  "branchName": "Дилерская сеть",
+  "level": 3,
+  "triangles": 1396
+ },
+ {
+  "id": "auto_special_1",
+  "file": "industries/auto/auto_special_1.glb",
+  "category": "industry",
+  "industry": "auto",
+  "industryName": "Автопром",
+  "branch": "special",
+  "branchName": "Тест-драйв",
+  "level": 1,
+  "triangles": 452
+ },
+ {
+  "id": "auto_special_2",
+  "file": "industries/auto/auto_special_2.glb",
+  "category": "industry",
+  "industry": "auto",
+  "industryName": "Автопром",
+  "branch": "special",
+  "branchName": "Тест-драйв",
+  "level": 2,
+  "triangles": 640
+ },
+ {
+  "id": "auto_special_3",
+  "file": "industries/auto/auto_special_3.glb",
+  "category": "industry",
+  "industry": "auto",
+  "industryName": "Автопром",
+  "branch": "special",
+  "branchName": "Тест-драйв",
+  "level": 3,
+  "triangles": 912
+ },
+ {
+  "id": "tourism_rent_1",
+  "file": "industries/tourism/tourism_rent_1.glb",
+  "category": "industry",
+  "industry": "tourism",
+  "industryName": "Туризм",
+  "branch": "rent",
+  "branchName": "Отель → Курорт",
+  "level": 1,
+  "triangles": 168
+ },
+ {
+  "id": "tourism_rent_2",
+  "file": "industries/tourism/tourism_rent_2.glb",
+  "category": "industry",
+  "industry": "tourism",
+  "industryName": "Туризм",
+  "branch": "rent",
+  "branchName": "Отель → Курорт",
+  "level": 2,
+  "triangles": 372
+ },
+ {
+  "id": "tourism_rent_3",
+  "file": "industries/tourism/tourism_rent_3.glb",
+  "category": "industry",
+  "industry": "tourism",
+  "industryName": "Туризм",
+  "branch": "rent",
+  "branchName": "Отель → Курорт",
+  "level": 3,
+  "triangles": 852
+ },
+ {
+  "id": "tourism_income_1",
+  "file": "industries/tourism/tourism_income_1.glb",
+  "category": "industry",
+  "industry": "tourism",
+  "industryName": "Туризм",
+  "branch": "income",
+  "branchName": "Санаторий",
+  "level": 1,
+  "triangles": 120
+ },
+ {
+  "id": "tourism_income_2",
+  "file": "industries/tourism/tourism_income_2.glb",
+  "category": "industry",
+  "industry": "tourism",
+  "industryName": "Туризм",
+  "branch": "income",
+  "branchName": "Санаторий",
+  "level": 2,
+  "triangles": 190
+ },
+ {
+  "id": "tourism_income_3",
+  "file": "industries/tourism/tourism_income_3.glb",
+  "category": "industry",
+  "industry": "tourism",
+  "industryName": "Туризм",
+  "branch": "income",
+  "branchName": "Санаторий",
+  "level": 3,
+  "triangles": 358
+ },
+ {
+  "id": "tourism_special_1",
+  "file": "industries/tourism/tourism_special_1.glb",
+  "category": "industry",
+  "industry": "tourism",
+  "industryName": "Туризм",
+  "branch": "special",
+  "branchName": "Аквапарк",
+  "level": 1,
+  "triangles": 144
+ },
+ {
+  "id": "tourism_special_2",
+  "file": "industries/tourism/tourism_special_2.glb",
+  "category": "industry",
+  "industry": "tourism",
+  "industryName": "Туризм",
+  "branch": "special",
+  "branchName": "Аквапарк",
+  "level": 2,
+  "triangles": 156
+ },
+ {
+  "id": "tourism_special_3",
+  "file": "industries/tourism/tourism_special_3.glb",
+  "category": "industry",
+  "industry": "tourism",
+  "industryName": "Туризм",
+  "branch": "special",
+  "branchName": "Аквапарк",
+  "level": 3,
+  "triangles": 252
+ },
+ {
+  "id": "gas_rent_1",
+  "file": "industries/gas/gas_rent_1.glb",
+  "category": "industry",
+  "industry": "gas",
+  "industryName": "Газ",
+  "branch": "rent",
+  "branchName": "Скважина → Газовый промысел",
+  "level": 1,
+  "triangles": 120
+ },
+ {
+  "id": "gas_rent_2",
+  "file": "industries/gas/gas_rent_2.glb",
+  "category": "industry",
+  "industry": "gas",
+  "industryName": "Газ",
+  "branch": "rent",
+  "branchName": "Скважина → Газовый промысел",
+  "level": 2,
+  "triangles": 568
+ },
+ {
+  "id": "gas_rent_3",
+  "file": "industries/gas/gas_rent_3.glb",
+  "category": "industry",
+  "industry": "gas",
+  "industryName": "Газ",
+  "branch": "rent",
+  "branchName": "Скважина → Газовый промысел",
+  "level": 3,
+  "triangles": 894
+ },
+ {
+  "id": "gas_income_1",
+  "file": "industries/gas/gas_income_1.glb",
+  "category": "industry",
+  "industry": "gas",
+  "industryName": "Газ",
+  "branch": "income",
+  "branchName": "Газопровод",
+  "level": 1,
+  "triangles": 196
+ },
+ {
+  "id": "gas_income_2",
+  "file": "industries/gas/gas_income_2.glb",
+  "category": "industry",
+  "industry": "gas",
+  "industryName": "Газ",
+  "branch": "income",
+  "branchName": "Газопровод",
+  "level": 2,
+  "triangles": 388
+ },
+ {
+  "id": "gas_income_3",
+  "file": "industries/gas/gas_income_3.glb",
+  "category": "industry",
+  "industry": "gas",
+  "industryName": "Газ",
+  "branch": "income",
+  "branchName": "Газопровод",
+  "level": 3,
+  "triangles": 584
+ },
+ {
+  "id": "gas_special_1",
+  "file": "industries/gas/gas_special_1.glb",
+  "category": "industry",
+  "industry": "gas",
+  "industryName": "Газ",
+  "branch": "special",
+  "branchName": "СПГ-завод",
+  "level": 1,
+  "triangles": 300
+ },
+ {
+  "id": "gas_special_2",
+  "file": "industries/gas/gas_special_2.glb",
+  "category": "industry",
+  "industry": "gas",
+  "industryName": "Газ",
+  "branch": "special",
+  "branchName": "СПГ-завод",
+  "level": 2,
+  "triangles": 554
+ },
+ {
+  "id": "gas_special_3",
+  "file": "industries/gas/gas_special_3.glb",
+  "category": "industry",
+  "industry": "gas",
+  "industryName": "Газ",
+  "branch": "special",
+  "branchName": "СПГ-завод",
+  "level": 3,
+  "triangles": 1314
+ },
+ {
+  "id": "oil_rent_1",
+  "file": "industries/oil/oil_rent_1.glb",
+  "category": "industry",
+  "industry": "oil",
+  "industryName": "Нефть",
+  "branch": "rent",
+  "branchName": "Буровая → Нефтекачалка",
+  "level": 1,
+  "triangles": 240
+ },
+ {
+  "id": "oil_rent_2",
+  "file": "industries/oil/oil_rent_2.glb",
+  "category": "industry",
+  "industry": "oil",
+  "industryName": "Нефть",
+  "branch": "rent",
+  "branchName": "Буровая → Нефтекачалка",
+  "level": 2,
+  "triangles": 260
+ },
+ {
+  "id": "oil_rent_3",
+  "file": "industries/oil/oil_rent_3.glb",
+  "category": "industry",
+  "industry": "oil",
+  "industryName": "Нефть",
+  "branch": "rent",
+  "branchName": "Буровая → Нефтекачалка",
+  "level": 3,
+  "triangles": 632
+ },
+ {
+  "id": "oil_income_1",
+  "file": "industries/oil/oil_income_1.glb",
+  "category": "industry",
+  "industry": "oil",
+  "industryName": "Нефть",
+  "branch": "income",
+  "branchName": "НПЗ",
+  "level": 1,
+  "triangles": 532
+ },
+ {
+  "id": "oil_income_2",
+  "file": "industries/oil/oil_income_2.glb",
+  "category": "industry",
+  "industry": "oil",
+  "industryName": "Нефть",
+  "branch": "income",
+  "branchName": "НПЗ",
+  "level": 2,
+  "triangles": 1314
+ },
+ {
+  "id": "oil_income_3",
+  "file": "industries/oil/oil_income_3.glb",
+  "category": "industry",
+  "industry": "oil",
+  "industryName": "Нефть",
+  "branch": "income",
+  "branchName": "НПЗ",
+  "level": 3,
+  "triangles": 1634
+ },
+ {
+  "id": "oil_special_1",
+  "file": "industries/oil/oil_special_1.glb",
+  "category": "industry",
+  "industry": "oil",
+  "industryName": "Нефть",
+  "branch": "special",
+  "branchName": "Нефтепровод",
+  "level": 1,
+  "triangles": 176
+ },
+ {
+  "id": "oil_special_2",
+  "file": "industries/oil/oil_special_2.glb",
+  "category": "industry",
+  "industry": "oil",
+  "industryName": "Нефть",
+  "branch": "special",
+  "branchName": "Нефтепровод",
+  "level": 2,
+  "triangles": 324
+ },
+ {
+  "id": "oil_special_3",
+  "file": "industries/oil/oil_special_3.glb",
+  "category": "industry",
+  "industry": "oil",
+  "industryName": "Нефть",
+  "branch": "special",
+  "branchName": "Нефтепровод",
+  "level": 3,
+  "triangles": 696
+ },
+ {
+  "id": "finance_rent_1",
+  "file": "industries/finance/finance_rent_1.glb",
+  "category": "industry",
+  "industry": "finance",
+  "industryName": "Финансы и IT",
+  "branch": "rent",
+  "branchName": "Бизнес-центр → Небоскрёб",
+  "level": 1,
+  "triangles": 204
+ },
+ {
+  "id": "finance_rent_2",
+  "file": "industries/finance/finance_rent_2.glb",
+  "category": "industry",
+  "industry": "finance",
+  "industryName": "Финансы и IT",
+  "branch": "rent",
+  "branchName": "Бизнес-центр → Небоскрёб",
+  "level": 2,
+  "triangles": 468
+ },
+ {
+  "id": "finance_rent_3",
+  "file": "industries/finance/finance_rent_3.glb",
+  "category": "industry",
+  "industry": "finance",
+  "industryName": "Финансы и IT",
+  "branch": "rent",
+  "branchName": "Бизнес-центр → Небоскрёб",
+  "level": 3,
+  "triangles": 662
+ },
+ {
+  "id": "finance_income_1",
+  "file": "industries/finance/finance_income_1.glb",
+  "category": "industry",
+  "industry": "finance",
+  "industryName": "Финансы и IT",
+  "branch": "income",
+  "branchName": "Банк",
+  "level": 1,
+  "triangles": 248
+ },
+ {
+  "id": "finance_income_2",
+  "file": "industries/finance/finance_income_2.glb",
+  "category": "industry",
+  "industry": "finance",
+  "industryName": "Финансы и IT",
+  "branch": "income",
+  "branchName": "Банк",
+  "level": 2,
+  "triangles": 432
+ },
+ {
+  "id": "finance_income_3",
+  "file": "industries/finance/finance_income_3.glb",
+  "category": "industry",
+  "industry": "finance",
+  "industryName": "Финансы и IT",
+  "branch": "income",
+  "branchName": "Банк",
+  "level": 3,
+  "triangles": 680
+ },
+ {
+  "id": "finance_special_1",
+  "file": "industries/finance/finance_special_1.glb",
+  "category": "industry",
+  "industry": "finance",
+  "industryName": "Финансы и IT",
+  "branch": "special",
+  "branchName": "IT-хаб",
+  "level": 1,
+  "triangles": 108
+ },
+ {
+  "id": "finance_special_2",
+  "file": "industries/finance/finance_special_2.glb",
+  "category": "industry",
+  "industry": "finance",
+  "industryName": "Финансы и IT",
+  "branch": "special",
+  "branchName": "IT-хаб",
+  "level": 2,
+  "triangles": 308
+ },
+ {
+  "id": "finance_special_3",
+  "file": "industries/finance/finance_special_3.glb",
+  "category": "industry",
+  "industry": "finance",
+  "industryName": "Финансы и IT",
+  "branch": "special",
+  "branchName": "IT-хаб",
+  "level": 3,
+  "triangles": 560
+ },
+ {
+  "id": "construction_site",
+  "file": "tiles/construction_site.glb",
+  "category": "tiles",
+  "name": "Стройплощадка",
+  "triangles": 420
+ },
+ {
+  "id": "transsib",
+  "file": "tiles/transsib.glb",
+  "category": "tiles",
+  "name": "Транссиб",
+  "triangles": 444
+ },
+ {
+  "id": "port_novorossiysk",
+  "file": "tiles/port_novorossiysk.glb",
+  "category": "tiles",
+  "name": "Порт Новороссийск",
+  "triangles": 240
+ },
+ {
+  "id": "port_vladivostok",
+  "file": "tiles/port_vladivostok.glb",
+  "category": "tiles",
+  "name": "Порт Владивосток",
+  "triangles": 240
+ },
+ {
+  "id": "airport_sheremetyevo",
+  "file": "tiles/airport_sheremetyevo.glb",
+  "category": "tiles",
+  "name": "Аэропорт Шереметьево",
+  "triangles": 336
+ },
+ {
+  "id": "hydro",
+  "file": "tiles/hydro.glb",
+  "category": "tiles",
+  "name": "ГЭС на Енисее",
+  "triangles": 216
+ },
+ {
+  "id": "nuclear",
+  "file": "tiles/nuclear.glb",
+  "category": "tiles",
+  "name": "АЭС",
+  "triangles": 852
+ },
+ {
+  "id": "start",
+  "file": "corners/start.glb",
+  "category": "corners",
+  "name": "Старт",
+  "triangles": 96
+ },
+ {
+  "id": "casino",
+  "file": "corners/casino.glb",
+  "category": "corners",
+  "name": "Казино",
+  "triangles": 416
+ },
+ {
+  "id": "forum",
+  "file": "corners/forum.glb",
+  "category": "corners",
+  "name": "Экономический форум",
+  "triangles": 240
+ },
+ {
+  "id": "zagul",
+  "file": "corners/zagul.glb",
+  "category": "corners",
+  "name": "Загул",
+  "triangles": 356
+ },
+ {
+  "id": "sedan",
+  "file": "tokens/sedan.glb",
+  "category": "tokens",
+  "name": "Чёрный седан",
+  "triangles": 152
+ },
+ {
+  "id": "helicopter",
+  "file": "tokens/helicopter.glb",
+  "category": "tokens",
+  "name": "Вертолёт",
+  "triangles": 192
+ },
+ {
+  "id": "yacht",
+  "file": "tokens/yacht.glb",
+  "category": "tokens",
+  "name": "Яхта",
+  "triangles": 60
+ },
+ {
+  "id": "safe",
+  "file": "tokens/safe.glb",
+  "category": "tokens",
+  "name": "Сейф",
+  "triangles": 72
+ },
+ {
+  "id": "derrick",
+  "file": "tokens/derrick.glb",
+  "category": "tokens",
+  "name": "Нефтяная вышка",
+  "triangles": 228
+ },
+ {
+  "id": "goldbar",
+  "file": "tokens/goldbar.glb",
+  "category": "tokens",
+  "name": "Золотой слиток",
+  "triangles": 24
+ },
+ {
+  "id": "dice",
+  "file": "props/dice.glb",
+  "category": "props",
+  "name": "Кубик",
+  "triangles": 1020
+ }
+]

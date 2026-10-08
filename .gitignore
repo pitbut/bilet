@@ -1,0 +1,5 @@
+node_modules/
+prototype/dist/
+prototype/public/models/
+__pycache__/
+*.log
