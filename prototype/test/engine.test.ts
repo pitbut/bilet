@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GameConfig, GameState, act, buildCost, canTakeover, capital, companyValue, handValue, lotPrice, newGame, rentFor } from "../src/engine/engine";
+import { GameConfig, GameState, act, adCost, buildCost, canTakeover, capital, companyValue, fame, handValue, lotPrice, luxCost, newGame, rentFor } from "../src/engine/engine";
 import { playOut } from "../src/engine/runner";
 
 const players = (n: number, bot = false): GameConfig["players"] =>
@@ -415,5 +415,77 @@ describe("складчина, кредиты, снос", () => {
     expect(s.players[0].money).toBe(1600);
     expect(s.props[39].branch).toBeNull();
     expect(act(s, 0, { t: "build", cell: 39, branch: "income" }).ok).toBe(true);
+  });
+});
+
+describe("вклад, роскошь, реклама", () => {
+  it("вклад: 2% за каждый свой ход, снять можно в любой свой ход, выручает при платеже", () => {
+    const s = game(2);
+    expect(act(s, 0, { t: "deposit", amount: 1000 }).ok).toBe(true);
+    expect(s.players[0].money).toBe(500);
+    expect(capital(s, 0)).toBe(1500);
+    pass(s); pass(s);
+    expect(s.players[0].money).toBe(520);
+    expect(act(s, 0, { t: "withdraw", amount: 300 }).ok).toBe(true);
+    expect(s.players[0].deposit).toBe(700);
+    s.players[0].money = 0;
+    s.players[0].pos = 37;
+    roll(s, 1, 0); // «Налог на роскошь» — платим со вклада
+    expect(s.players[0].bankrupt).toBe(false);
+    expect(s.players[0].deposit).toBe(700 - 75);
+  });
+
+  it("роскошь: налог при покупке, статус поднимает аренду, вещь считается в капитале и продаётся", () => {
+    const s = game(2);
+    s.props[39].owner = 0;
+    const rent0 = rentFor(s, 39);
+    expect(act(s, 0, { t: "buyLux", kind: "car" }).ok).toBe(true);
+    expect(s.players[0].money).toBe(1500 - luxCost("car"));
+    expect(luxCost("car")).toBeGreaterThan(350);
+    expect(fame(s, 0)).toBe(3);
+    expect(rentFor(s, 39)).toBe(Math.round(rent0 * 1.09));
+    expect(act(s, 0, { t: "buyLux", kind: "car" }).ok).toBe(false);
+    const it0 = s.players[0].lux[0];
+    expect(capital(s, 0)).toBe(1500 - luxCost("car") + 350 + Math.round(companyValue(s, 39)));
+    expect(act(s, 0, { t: "sellLux", id: it0.id }).ok).toBe(true);
+    expect(s.players[0].money).toBe(1500 - luxCost("car") + 350);
+    expect(fame(s, 0)).toBe(0);
+  });
+
+  it("вечеринка на яхте даёт вдвое больше статуса, через 3 хода эффект проходит", () => {
+    const s = game(2, { startMoney: 5000 });
+    act(s, 0, { t: "buyLux", kind: "yacht" });
+    expect(act(s, 0, { t: "experience", kind: "party" }).ok).toBe(true);
+    expect(fame(s, 0)).toBe(10 + 8);
+    expect(act(s, 0, { t: "experience", kind: "party" }).ok).toBe(false);
+    for (let k = 0; k < 6; k++) pass(s);
+    expect(fame(s, 0)).toBe(10);
+  });
+
+  it("подарки семье: заначка выручает, когда не хватает на платёж", () => {
+    const s = game(2);
+    expect(act(s, 0, { t: "experience", kind: "gifts" }).ok).toBe(true);
+    expect(s.players[0].stash).toBe(150);
+    expect(capital(s, 0)).toBe(1500);
+    s.players[0].money = 10;
+    s.players[0].pos = 37;
+    roll(s, 1, 0);
+    expect(s.players[0].bankrupt).toBe(false);
+    expect(s.players[0].stash).toBe(150 - 65);
+  });
+
+  it("реклама: аренда выше, продажи каждый свой ход, по окончании эффект снимается", () => {
+    const s = game(2);
+    s.props[39].owner = 0;
+    const rent0 = rentFor(s, 39);
+    const cost = adCost(s, 0, 39, "flyers");
+    expect(act(s, 0, { t: "advertise", cell: 39, kind: "flyers" }).ok).toBe(true);
+    expect(s.players[0].money).toBe(1500 - cost);
+    expect(rentFor(s, 39)).toBe(Math.round(rent0 * 1.3));
+    expect(act(s, 0, { t: "advertise", cell: 39, kind: "tv" }).ok).toBe(false);
+    pass(s); pass(s);
+    expect(s.players[0].money).toBe(1500 - cost + Math.round(rent0 * 0.35));
+    for (let k = 0; k < 4; k++) pass(s);
+    expect(s.props[39].ad).toBeNull();
   });
 });

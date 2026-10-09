@@ -1,6 +1,6 @@
 // Боты с характерами: Акула, Скряга, Игроман, Торгаш.
 import { BOARD, BranchId, industryCells } from "./board";
-import { Action, GameState, Personality, canBuild, canTakeover, companyValue, freeLots, hasMonopoly, loanLimit, lotPrice, ownedCount, randInt, rentFor } from "./engine";
+import { AD, Action, ExpKind, GameState, LUX, LuxKind, Personality, adCost, luxPayback, canBuild, canTakeover, companyValue, expCost, freeLots, hasBuff, hasMonopoly, loanLimit, lotPrice, luxCost, ownedCount, randInt, rentFor } from "./engine";
 
 const RESERVE: Record<Personality, number> = { shark: 100, miser: 400, gambler: 150, trader: 250 };
 const BRANCH: Record<Personality, BranchId> = { shark: "rent", miser: "income", gambler: "special", trader: "rent" };
@@ -46,6 +46,8 @@ export function botAction(s: GameState): Action {
       if (st) return st;
       const b = pickBuild(s, reserve, BRANCH[pers]);
       if (b) return b;
+      const life = pl.difficulty === "easy" ? null : lifeMove(s, reserve);
+      if (life) return life;
       if (s.phase === "end") {
         const mort = Object.entries(s.props).find(([i, p]) =>
           p.owner === pl.id && p.mortgaged && pl.money - BOARD[+i].price! * 0.6 > reserve * 2);
@@ -124,6 +126,61 @@ function stockMove(s: GameState, reserve: number): Action | null {
       if (!best || y > best.y) best = { i: +k, y };
     }
     if (best && best.y > 0.05) return { t: "buyShares", cell: best.i, lots: 1 };
+  }
+  return null;
+}
+
+/** Переключатели для симулятора баланса. */
+export const botTuning = { deposit: true, ads: true, lux: true, luxBy: null as Personality[] | null };
+
+/** Вклад, реклама и роскошь: богатый бот тратит лишнее с пользой, скряга копит на вкладе. */
+function lifeMove(s: GameState, reserve: number): Action | null {
+  const pl = s.players[s.current];
+  const T = botTuning;
+  const pers = pl.personality ?? "trader";
+  if (s.phase === "roll" && pl.deposit > 0 && pl.money < reserve * 2.5) {
+    return { t: "withdraw", amount: Math.min(pl.deposit, Math.ceil(reserve * 2.5 - pl.money)) };
+  }
+  // отдых перед дорогой стройкой: скидка окупает поездку
+  if (s.phase === "roll" && !hasBuff(s, pl.id, "vacation")) {
+    const big = Object.keys(s.props).map(Number).map((i) => canBuild(s, pl.id, i)).filter((c) => c.cost && c.cost >= 900);
+    if (big.length && pl.money > big[0].cost! + expCost("vacation") + reserve) return { t: "experience", kind: "vacation" };
+  }
+  // реклама самой доходной компании
+  if (T.ads && Object.values(s.props).filter((p) => p.owner === pl.id && p.ad).length < 2) {
+    const best = Object.keys(s.props).map(Number).filter((i) => s.props[i].owner === pl.id && !s.props[i].ad && !s.props[i].mortgaged)
+      .sort((a, b) => rentFor(s, b, 7, false) - rentFor(s, a, 7, false))[0];
+    if (best !== undefined && rentFor(s, best, 7, false) >= 40) {
+      const kind = rentFor(s, best, 7, false) >= 100 && pl.money > 1200 ? "tv" : "flyers";
+      if (pl.money - adCost(s, pl.id, best, kind) > reserve * 2) return { t: "advertise", cell: best, kind };
+    }
+  }
+  void AD;
+  // перепродать подорожавшую картину
+  const art = pl.lux.find((l) => l.kind === "painting" && l.value > l.paid * 1.4);
+  if (!T.lux || (T.luxBy && !T.luxBy.includes(pers))) return depositMove(s);
+  if (art && pers !== "gambler") return { t: "sellLux", id: art.id };
+  if (s.round >= 4) {
+    const spare = { shark: 1000, miser: 2500, gambler: 1100, trader: 1300 }[pers];
+    const order: LuxKind[] = pers === "trader" ? ["painting", "car", "mansion", "yacht"] : pers === "miser" ? ["mansion"] : ["car", "mansion", "yacht", "painting"];
+    for (const k of order) {
+      if (pl.lux.filter((l) => l.kind === k).length >= LUX[k].max) continue;
+      const pay = luxPayback(s, pl.id, k);
+      if (pay !== null && pay <= 12 && pl.money - luxCost(k) > spare) return { t: "buyLux", kind: k };
+      break; // копит на следующую по списку
+    }
+    // вечеринка — для удовольствия, когда денег очень много; подарки — подушка на чёрный день
+    const exp: ExpKind | null = pers === "gambler" && pl.money > 2500 ? "party" : pers === "miser" && pl.stash < 300 && pl.money > 900 ? "gifts" : null;
+    if (exp && !hasBuff(s, pl.id, exp) && pl.money - expCost(exp) > reserve) return { t: "experience", kind: exp };
+  }
+  return depositMove(s);
+}
+
+function depositMove(s: GameState): Action | null {
+  const pl = s.players[s.current];
+  const pers = pl.personality ?? "trader";
+  if (botTuning.deposit && s.phase === "end" && (pers === "miser" || pers === "trader") && pl.money > 1100) {
+    return { t: "deposit", amount: pl.money - 800 };
   }
   return null;
 }

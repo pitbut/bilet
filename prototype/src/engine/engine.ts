@@ -48,7 +48,22 @@ export interface Player extends PlayerConfig {
   tote: { choice: ToteChoice; amount: number } | null;
   /** Кредиты банка под залог компании или акций. */
   loans: Loan[];
+  /** Вклад в банке под процент. */
+  deposit: number;
+  /** Роскошь: машины, особняк, яхта, картины. */
+  lux: LuxItem[];
+  /** Временные эффекты: вечеринка, отдых, подарки семье. */
+  buffs: Buff[];
+  /** Семейная заначка: подарки семье возвращаются, когда совсем туго. */
+  stash: number;
 }
+
+export type LuxKind = "car" | "mansion" | "yacht" | "painting";
+export type ExpKind = "party" | "vacation" | "gifts";
+export interface LuxItem { id: number; kind: LuxKind; value: number; paid: number }
+export interface Buff { kind: ExpKind; rounds: number; fame: number }
+export type AdKind = "flyers" | "tv";
+export interface Ad { kind: AdKind; rounds: number }
 
 /** Кредит: залог — своя компания (company) или свои акции чужой компании (shares). */
 export interface Loan { id: number; kind: "company" | "shares"; cell: number; amount: number; due: number }
@@ -84,6 +99,8 @@ export interface Property {
   listings: Listing[];
   /** Спрос на акции: множитель цены (1 — норма). */
   demand: number;
+  /** Идущая рекламная кампания. */
+  ad: Ad | null;
 }
 
 export interface MarketEvent {
@@ -119,6 +136,8 @@ export type GameEvent =
   | { type: "bankrupt"; player: number; creditor: number | null }
   | { type: "turn"; player: number; round: number }
   | { type: "log"; text: string }
+  | { type: "lux"; player: number; kind: LuxKind | ExpKind; text: string }
+  | { type: "ad"; player: number; cell: number; kind: AdKind }
   | { type: "gameover"; winner: number };
 
 export interface GameState {
@@ -140,6 +159,7 @@ export interface GameState {
   offers: Offer[];
   nextOfferId: number;
   nextLoanId: number;
+  nextLuxId: number;
   /** Только для тестов: заранее заданные броски. */
   forcedDice?: [number, number][];
 }
@@ -174,6 +194,12 @@ export type Action =
   | { t: "takeLoan"; cell: number; kind: "company" | "shares"; amount: number }
   | { t: "repayLoan"; id: number }
   | { t: "demolish"; cell: number }
+  | { t: "deposit"; amount: number }
+  | { t: "withdraw"; amount: number }
+  | { t: "buyLux"; kind: LuxKind }
+  | { t: "sellLux"; id: number }
+  | { t: "experience"; kind: ExpKind }
+  | { t: "advertise"; cell: number; kind: AdKind }
   | { t: "bidCompany"; cell: number; price: number }
   | { t: "acceptOffer"; id: number }
   | { t: "declineOffer"; id: number }
@@ -229,16 +255,17 @@ export const randInt = (s: GameState, n: number) => Math.floor(rand(s) * n);
 export function newGame(cfg: GameConfig): GameState {
   const props: Record<number, Property> = {};
   for (const c of BOARD) {
-    if (c.price) props[c.index] = { owner: null, level: 0, branch: null, mortgaged: false, invested: 0, construction: null, fastBonus: false, holders: {}, listings: [], demand: 1 };
+    if (c.price) props[c.index] = { owner: null, level: 0, branch: null, mortgaged: false, invested: 0, construction: null, fastBonus: false, holders: {}, listings: [], demand: 1, ad: null };
   }
   const s: GameState = {
     cfg,
     players: cfg.players.map((p, id) => ({
       ...p, id, money: cfg.startMoney ?? START_MONEY, pos: 0, bankrupt: false, inCasino: false,
       skipNext: false, energy: ENERGY_PER_ROUND, doubles: 0, casinoWinnings: 0, loungeBets: 0, trades: 0, bj: null, tote: null, loans: [],
+      deposit: 0, lux: [], buffs: [], stash: 0,
     })),
     props, current: 0, round: 1, phase: "roll", pending: null, casinoBets: 0, lastDice: [1, 1],
-    jackpot: 0, market: null, offers: [], nextOfferId: 1, nextLoanId: 1, rng: cfg.seed ?? Math.floor(Math.random() * 2 ** 31), events: [], winner: null, turnCounter: 0,
+    jackpot: 0, market: null, offers: [], nextOfferId: 1, nextLoanId: 1, nextLuxId: 1, rng: cfg.seed ?? Math.floor(Math.random() * 2 ** 31), events: [], winner: null, turnCounter: 0,
   };
   if (cfg.length === "quick") { // ускоритель быстрой партии: по случайной клетке каждому
     const free = BOARD.filter((c) => c.kind === "business").map((c) => c.index);
@@ -281,6 +308,7 @@ export function buildCost(s: GameState, pid: number, idx: number, level: number)
   if (hasSpecial(s, pid, "forest")) c *= 0.85;
   if (s.market?.buildCost) c *= s.market.buildCost;
   c *= 1 - PUBLIC_BUILD_DISCOUNT * soldLots(s.props[idx]); // деньги инвесторов удешевляют стройку
+  if (hasBuff(s, pid, "vacation")) c *= 1 - VACATION_BUILD_DISCOUNT; // отдохнул — свежие идеи, жёсткие переговоры с подрядчиками
   return Math.round(c);
 }
 
@@ -292,6 +320,7 @@ function speedFor(s: GameState, pid: number, idx: number, rush: boolean) {
   const ind = cell(idx).industry;
   if (ind && s.market?.slow?.includes(ind)) sp *= 0.5;
   sp *= 1 + PUBLIC_BUILD_SPEED * soldLots(s.props[idx]);
+  if (hasLux(s, pid, "car")) sp *= 1 + CAR_SPEED; // хозяин успевает объехать все стройки
   return sp;
 }
 
@@ -311,7 +340,7 @@ function rentAtLevel(s: GameState, idx: number, level: number): number {
   return r;
 }
 
-export function rentFor(s: GameState, idx: number, diceSum = 7): number {
+export function rentFor(s: GameState, idx: number, diceSum = 7, withAd = true): number {
   const c = cell(idx), p = s.props[idx];
   if (!p || p.owner === null || p.mortgaged) return 0;
   let r: number;
@@ -327,6 +356,8 @@ export function rentFor(s: GameState, idx: number, diceSum = 7): number {
     if (p.fastBonus) r *= 1.2;
   }
   r *= 1 + PUBLIC_RENT_BONUS * soldLots(p); // публичная компания известнее — аренда выше
+  r *= 1 + FAME_RENT * fame(s, p.owner); // статус владельца: к нему идут охотнее
+  if (withAd && p.ad) r *= 1 + AD[p.ad.kind].rent;
   return Math.round(r);
 }
 
@@ -339,6 +370,7 @@ export function capital(s: GameState, pid: number): number {
     else if (p.holders[pid]) v += p.holders[pid] * lotPrice(s, +i);
   }
   v -= pl.loans.reduce((a, l) => a + l.amount, 0);
+  v += pl.deposit + pl.stash + pl.lux.reduce((a, l) => a + l.value, 0); // заначка семьи — тоже капитал
   return Math.round(v);
 }
 
@@ -466,11 +498,11 @@ export function botAsk(s: GameState, owner: number, idx: number, whole: boolean,
   const pl = s.players[owner], p = s.props[idx], c = cell(idx);
   const greed = { shark: 1.3, miser: 1.15, gambler: 1.0, trader: 1.1 }[pl.personality ?? "trader"];
   const poor = pl.money < 250 ? 0.85 : 1;
-  if (!whole) return freeLots(s, owner, idx) > 0 ? Math.round(lotPrice(s, idx) * (greed - 0.05) * poor) : null;
+  if (!whole) return freeLots(s, owner, idx) > 0 ? Math.round(lotPrice(s, idx) * (greed - 0.05) * poor * dealFactor(s, buyer)) : null;
   let ask = companyValue(s, idx) * ownerLots(p) / LOTS + rentFor(s, idx) * 4;
   if (c.industry && hasMonopoly(s, owner, c.industry)) ask *= 2.2; // свою монополию просто так не отдаст
   if (c.industry && industryCells(c.industry).filter((i) => i !== idx).every((i) => owns(s, buyer, i))) ask *= 1.6; // покупателю она нужна для монополии
-  return Math.round(ask * greed * poor);
+  return Math.round(ask * greed * poor * dealFactor(s, buyer));
 }
 
 // ---------- Банк: кредиты под залог ----------
@@ -486,10 +518,10 @@ export function loanLimit(s: GameState, pid: number, idx: number, kind: "company
   if (pl.loans.some((l) => l.cell === idx && l.kind === kind)) return 0;
   if (kind === "company") {
     if (p.owner !== pid || p.mortgaged) return 0;
-    return Math.floor(companyValue(s, idx) * ownerLots(p) / LOTS * LOAN_SHARE);
+    return Math.floor(companyValue(s, idx) * ownerLots(p) / LOTS * loanShare(s, pid));
   }
   const lots = (p.holders[pid] ?? 0) - listedBy(p, pid);
-  return lots > 0 ? Math.floor(lots * lotPrice(s, idx) * LOAN_SHARE) : 0;
+  return lots > 0 ? Math.floor(lots * lotPrice(s, idx) * loanShare(s, pid)) : 0;
 }
 
 /** Проценты и просрочка: вызывается в начале хода игрока. */
@@ -503,7 +535,7 @@ function serviceLoans(s: GameState, pid: number) {
       const p = s.props[l.cell];
       if (l.kind === "company" && p.owner === pid) {
         transferCompany(s, l.cell, null);
-        Object.assign(p, { level: 0, branch: null, mortgaged: false, invested: 0, fastBonus: false, construction: null });
+        Object.assign(p, { level: 0, branch: null, mortgaged: false, invested: 0, fastBonus: false, construction: null, ad: null });
         emit(s, { type: "buy", player: pid, cell: l.cell });
       } else if (l.kind === "shares" && p.holders[pid]) {
         delete p.holders[pid];
@@ -512,7 +544,133 @@ function serviceLoans(s: GameState, pid: number) {
       stockEvent(s, `Банк забирает залог у ${pl.name}: ${l.kind === "company" ? `«${name}»` : `акции «${name}»`} — кредит не погашен`, [pid]);
       continue;
     }
-    charge(s, pid, Math.max(1, Math.ceil(l.amount * LOAN_RATE)), null, `проценты по кредиту «${name}»`);
+    charge(s, pid, Math.max(1, Math.ceil(l.amount * loanRate(s, pid))), null, `проценты по кредиту «${name}»`);
+  }
+}
+
+// ---------- Вклад, роскошь, реклама ----------
+
+/** Вклад: проценты за каждый свой ход. Ниже кредита (5%) — банк зарабатывает на разнице. */
+export const DEPOSIT_RATE = 0.02;
+/** Налог на роскошь при покупке вещей и за вечеринку/отдых. Подарки семье налогом не облагаются. */
+export const LUX_TAX = 0.15;
+export const EXP_TAX = 0.1;
+/** Каждая звезда статуса — +3% к аренде и доходу всех ваших компаний. */
+export const FAME_RENT = 0.03;
+export const FAME_CAP = 25;
+export const CAR_SPEED = 0.1;
+export const VACATION_BUILD_DISCOUNT = 0.25;
+export const VACATION_ENERGY = 30;
+export const YACHT_UPKEEP = 25;
+export const STASH_MAX = 600;
+
+export interface LuxSpec { name: string; price: number; fame: number; max: number; perk: string }
+export const LUX: Record<LuxKind, LuxSpec> = {
+  car: { name: "Спорткар", price: 350, fame: 3, max: 1, perk: "Стройки идут на 10% быстрее — успеваете объехать все объекты. Дешевеет на 5% за круг (не ниже половины цены)." },
+  mansion: { name: "Особняк на Рублёвке", price: 900, fame: 6, max: 1, perk: "Банк доверяет: кредит до 75% залога под 4% вместо 60% под 5%. Дорожает на 1,5% за круг." },
+  yacht: { name: "Яхта", price: 1600, fame: 10, max: 1, perk: "Вечеринка на яхте даёт вдвое больше статуса. Содержание 25 за ход, дешевеет на 3% за круг (не ниже 60% цены)." },
+  painting: { name: "Картина", price: 400, fame: 2, max: 3, perk: "Вложение: цена каждый круг меняется от −15% до +25%. Можно перепродать дороже." },
+};
+export interface ExpSpec { name: string; price: number; fame: number; rounds: number; perk: string }
+export const EXPERIENCES: Record<ExpKind, ExpSpec> = {
+  party: { name: "Вечеринка", price: 200, fame: 4, rounds: 3, perk: "Связи: 3 хода боты уступают в сделках 10%, охотнее идут в складчину; спрос на ваши акции +5%." },
+  vacation: { name: "Отдых на море", price: 200, fame: 3, rounds: 3, perk: "3 хода стройки дешевле на 25% и бригада +30 энергии. Выгодно перед дорогой стройкой." },
+  gifts: { name: "Подарки жене и детям", price: 150, fame: 2, rounds: 3, perk: "Семья — тыл: сумма уходит в семейную заначку (до 600): она считается в капитале и выручит, если не хватит на платёж." },
+};
+
+export interface AdSpec { name: string; costK: number; min: number; rounds: number; rent: number; sales: number; demand: number; text: string }
+export const AD: Record<AdKind, AdSpec> = {
+  flyers: { name: "Листовки и радио", costK: 1, min: 20, rounds: 3, rent: 0.3, sales: 0.35, demand: 1.0, text: "3 хода: аренда +30%, продажи — 35% аренды каждый ваш ход" },
+  tv: { name: "Реклама на ТВ", costK: 3, min: 60, rounds: 5, rent: 0.5, sales: 0.6, demand: 1.15, text: "5 ходов: аренда +50%, продажи — 60% аренды каждый ваш ход, акции +15%" },
+};
+
+export const hasLux = (s: GameState, pid: number | null, k: LuxKind) => pid !== null && !!s.players[pid]?.lux.some((l) => l.kind === k);
+export const hasBuff = (s: GameState, pid: number | null, k: ExpKind) => pid !== null && !!s.players[pid]?.buffs.some((b) => b.kind === k);
+
+/** Статус (звёзды): вещи — пока владеете, вечеринка/отдых/подарки — несколько ходов. */
+export function fame(s: GameState, pid: number | null): number {
+  if (pid === null) return 0;
+  const pl = s.players[pid];
+  if (!pl || pl.bankrupt) return 0;
+  const f = pl.lux.reduce((a, l) => a + LUX[l.kind].fame, 0) + pl.buffs.reduce((a, b) => a + b.fame, 0);
+  return Math.min(FAME_CAP, f);
+}
+
+/** Во сколько раз дешевле для этого игрока сделки с ботами: статус и связи с вечеринки. */
+export function dealFactor(s: GameState, pid: number): number {
+  return (1 - 0.005 * fame(s, pid)) * (hasBuff(s, pid, "party") ? 0.9 : 1);
+}
+
+export const loanShare = (s: GameState, pid: number) => (hasLux(s, pid, "mansion") ? 0.75 : LOAN_SHARE);
+export const loanRate = (s: GameState, pid: number) => (hasLux(s, pid, "mansion") ? 0.04 : LOAN_RATE);
+export const luxValue = (s: GameState, pid: number) => s.players[pid].lux.reduce((a, l) => a + l.value, 0);
+export const luxuryTaxCell = (s: GameState, pid: number) => 75 + Math.round(luxValue(s, pid) * 0.05);
+export const luxCost = (k: LuxKind) => Math.round(LUX[k].price * (1 + LUX_TAX));
+export const expCost = (k: ExpKind) => Math.round(EXPERIENCES[k].price * (k === "gifts" ? 1 : 1 + EXP_TAX));
+
+export function adCost(s: GameState, pid: number, idx: number, kind: AdKind): number {
+  const running = Object.values(s.props).filter((p) => p.owner === pid && p.ad).length;
+  const spec = AD[kind];
+  return Math.round(Math.max(spec.min, rentFor(s, idx, 7, false) * spec.costK) * (1 + 0.15 * running));
+}
+
+export const roundsLeft = (s: GameState) => Math.max(0, (s.cfg.length === "quick" ? s.cfg.quickRounds ?? 15 : s.cfg.classicRounds ?? 50) - s.round + 1);
+
+/** Примерный доход компаний игрока за круг: аренда (с частотой попаданий соперников), доход веток, продажи от рекламы. */
+export function companyIncome(s: GameState, pid: number): number {
+  const visit = Math.max(1, active(s).length - 1) * 0.028;
+  let v = 0;
+  for (const [i, p] of Object.entries(s.props)) {
+    if (p.owner !== pid || p.mortgaged) continue;
+    const c = cell(+i);
+    v += rentFor(s, +i) * visit;
+    if (p.branch === "income" && p.level) v += (c.price ?? 0) * INCOME_SHARE[p.level - 1];
+    if (p.ad) v += rentFor(s, +i, 7, false) * AD[p.ad.kind].sales;
+  }
+  return v / (1 + FAME_RENT * fame(s, pid));
+}
+
+/** За сколько кругов вещь окупится статусом (с учётом перепродажи). null — не окупится до конца партии. */
+export function luxPayback(s: GameState, pid: number, k: LuxKind): number | null {
+  const now = fame(s, pid), add = Math.min(FAME_CAP, now + LUX[k].fame) - now;
+  const gain = FAME_RENT * add * companyIncome(s, pid) - (k === "yacht" ? YACHT_UPKEEP : 0);
+  const resale = LUX[k].price * (k === "mansion" ? 1 : k === "painting" ? 1 : k === "yacht" ? 0.7 : 0.6);
+  if (gain <= 0) return null;
+  const r = Math.ceil((luxCost(k) - resale) / gain);
+  return r <= roundsLeft(s) ? r : null;
+}
+
+/** Начало своего хода: проценты по вкладу, яхта, реклама и временные эффекты. */
+function serviceLife(s: GameState, pid: number) {
+  const pl = s.players[pid];
+  if (pl.deposit > 0) {
+    const k = Math.floor(pl.deposit * DEPOSIT_RATE);
+    if (k > 0) give(s, pid, k, "проценты по вкладу");
+  }
+  if (hasLux(s, pid, "yacht") && !charge(s, pid, YACHT_UPKEEP, null, "содержание яхты")) return;
+  if (hasBuff(s, pid, "vacation")) pl.energy += VACATION_ENERGY;
+  for (const b of pl.buffs) b.rounds -= 1;
+  pl.buffs = pl.buffs.filter((b) => b.rounds > 0);
+  for (const [i, p] of Object.entries(s.props)) {
+    if (p.owner !== pid || !p.ad) continue;
+    if (!p.mortgaged) {
+      const sales = Math.round(rentFor(s, +i, 7, false) * AD[p.ad.kind].sales);
+      if (sales > 0) { give(s, pid, sales, `продажи «${cell(+i).name}» (реклама)`); shareOut(s, +i, sales, "продажи"); }
+    }
+    p.ad.rounds -= 1;
+    if (p.ad.rounds <= 0) p.ad = null;
+  }
+}
+
+/** Новый круг: машины и яхты дешевеют, особняк дорожает, картины — как повезёт. */
+function updateLuxValues(s: GameState) {
+  for (const pl of s.players) {
+    for (const it of pl.lux) {
+      if (it.kind === "car") it.value = Math.max(Math.round(it.paid * 0.5), Math.round(it.value * 0.95));
+      else if (it.kind === "yacht") it.value = Math.max(Math.round(it.paid * 0.6), Math.round(it.value * 0.97));
+      else if (it.kind === "mansion") it.value = Math.round(it.value * 1.015);
+      else it.value = Math.max(50, Math.round(it.value * (0.85 + rand(s) * 0.4)));
+    }
   }
 }
 
@@ -522,7 +680,7 @@ function serviceLoans(s: GameState, pid: number) {
 export function coopAnswer(s: GameState, pid: number, idx: number, lots: number): boolean {
   const pl = s.players[pid];
   const share = Math.ceil((cell(idx).price ?? 0) * lots / LOTS);
-  const reserve = { shark: 150, miser: 450, gambler: 150, trader: 250 }[pl.personality ?? "trader"];
+  const reserve = { shark: 150, miser: 450, gambler: 150, trader: 250 }[pl.personality ?? "trader"] * dealFactor(s, s.current);
   return !pl.bankrupt && pl.money - share >= reserve;
 }
 
@@ -581,6 +739,24 @@ function charge(s: GameState, pid: number, amount: number, creditor: number | nu
 
 function raiseFunds(s: GameState, pid: number, need: number) {
   const pl = s.players[pid];
+  if (pl.deposit > 0) { // сначала снимаем вклад
+    const k = Math.min(pl.deposit, need - pl.money);
+    pl.deposit -= k;
+    give(s, pid, k, "снятие со вклада");
+  }
+  if (pl.money < need && pl.stash > 0) { // семья выручает
+    const k = Math.min(pl.stash, need - pl.money);
+    pl.stash -= k;
+    give(s, pid, k, "семья выручила");
+    log(s, `${pl.name}: семья выручает — ${k} из заначки`);
+  }
+  // срочная продажа роскоши: дешёвое — первым, за 70% цены
+  for (const it of [...pl.lux].sort((a, b) => a.value - b.value)) {
+    if (pl.money >= need) return;
+    pl.lux = pl.lux.filter((x) => x !== it);
+    give(s, pid, Math.round(it.value * 0.7), `срочная продажа: ${LUX[it.kind].name}`);
+  }
+  if (pl.money >= need) return;
   const mine = Object.entries(s.props).filter(([, p]) => p.owner === pid).map(([i, p]) => ({ i: +i, p }));
   for (const { i, p } of mine) { // отменяем стройки — без возврата
     if (pl.money >= need) return;
@@ -627,6 +803,7 @@ function bankrupt(s: GameState, pid: number, creditor: number | null) {
   pl.bankrupt = true;
   s.offers = s.offers.filter((o) => o.from !== pid && o.to !== pid);
   pl.loans = [];
+  pl.lux = []; pl.buffs = []; pl.deposit = 0; pl.stash = 0;
   for (const [i, p] of Object.entries(s.props)) {
     p.listings = p.listings.filter((l) => l.seller !== pid);
     const held = p.holders[pid];
@@ -637,7 +814,7 @@ function bankrupt(s: GameState, pid: number, creditor: number | null) {
     if (p.owner !== pid) continue;
     p.construction = null;
     if (creditor !== null) transferCompany(s, +i, creditor);
-    else { transferCompany(s, +i, null); Object.assign(p, { level: 0, branch: null, mortgaged: false, invested: 0, fastBonus: false }); }
+    else { transferCompany(s, +i, null); Object.assign(p, { level: 0, branch: null, mortgaged: false, invested: 0, fastBonus: false, ad: null }); }
   }
   emit(s, { type: "bankrupt", player: pid, creditor });
   log(s, `${pl.name} — банкрот`);
@@ -664,6 +841,8 @@ function startTurn(s: GameState) {
   emit(s, { type: "turn", player: pl.id, round: s.round });
   serviceLoans(s, pl.id);
   if (pl.bankrupt) return;
+  serviceLife(s, pl.id);
+  if (pl.bankrupt) return;
   pl.loungeBets = 0;
   pl.trades = 0;
   // Доход веток «Доход», экспорта зерна и СПГ — с дивидендами акционерам.
@@ -674,7 +853,7 @@ function startTurn(s: GameState) {
     if (p.branch === "income") income += (c.price ?? 0) * INCOME_SHARE[p.level - 1] * (s.market?.rent[c.industry!] ?? 1);
     if (p.branch === "special" && c.industry === "agro") income += 20 * portsOwned(s, pl.id) * p.level;
     if (p.branch === "special" && c.industry === "gas") income += (c.price ?? 0) * 0.08 * (portsOwned(s, pl.id) ? 2 : 1);
-    income = Math.round(income);
+    income = Math.round(income * (1 + FAME_RENT * fame(s, pl.id)));
     if (income > 0) { give(s, pl.id, income, `доход «${c.name}»`); shareOut(s, +i, income, "доход"); }
   }
   if (pl.skipNext) {
@@ -699,6 +878,7 @@ function nextTurn(s: GameState) {
         if (p.listings.length) p.demand *= 0.97; else p.demand += (1 - p.demand) * 0.08;
         clampDemand(p);
       }
+      updateLuxValues(s);
       if (s.market) { s.market.roundsLeft -= 1; if (s.market.roundsLeft <= 0) s.market = null; }
       if (s.round % 3 === 0 && !s.market) {
         const ev = MARKET_EVENTS[randInt(s, MARKET_EVENTS.length)];
@@ -828,7 +1008,7 @@ function land(s: GameState, pid: number, diceSum: number) {
       if (pl.pos !== c.index) { land(s, pid, diceSum); return; }
       break;
     case "tax": {
-      const amount = c.tax === "luxury" ? 100 : Math.min(200, Math.round(capital(s, pid) * 0.1));
+      const amount = c.tax === "luxury" ? luxuryTaxCell(s, pid) : Math.min(200, Math.round(capital(s, pid) * 0.1));
       if (charge(s, pid, amount, null, c.name)) s.jackpot += Math.round(amount * 0.1);
       break;
     }
@@ -1256,6 +1436,71 @@ export function act(s: GameState, pid: number, a: Action): Result {
       stockEvent(s, `${pl.name} берёт в банке ${amount} под залог ${a.kind === "company" ? `«${cell(a.cell).name}»` : `акций «${cell(a.cell).name}»`} до ${l.due}-го раунда`, [pid]);
       return { ok: true };
     }
+    case "deposit": case "withdraw": case "buyLux": case "sellLux": case "experience": case "advertise": {
+      if (s.phase !== "roll" && s.phase !== "end") return { ok: false, error: "До броска или в конце хода" };
+      if (a.t === "deposit" || a.t === "withdraw") {
+        const amount = Math.round(a.amount);
+        const max = a.t === "deposit" ? pl.money : pl.deposit;
+        if (amount < 1 || amount > max) return { ok: false, error: `Можно от 1 до ${max}` };
+        if (a.t === "deposit") { pl.money -= amount; pl.deposit += amount; emit(s, { type: "money", player: pid, delta: -amount, reason: "вклад в банк" }); }
+        else { pl.deposit -= amount; give(s, pid, amount, "снятие со вклада"); }
+        return { ok: true };
+      }
+      if (a.t === "buyLux") {
+        const spec = LUX[a.kind];
+        if (!spec) return { ok: false, error: "Нет такого" };
+        if (pl.lux.filter((l) => l.kind === a.kind).length >= spec.max) return { ok: false, error: spec.max > 1 ? `Не больше ${spec.max}` : "Уже есть" };
+        const cost = luxCost(a.kind), tax = cost - spec.price;
+        if (pl.money < cost) return { ok: false, error: `Нужно ${cost} (с налогом на роскошь ${tax})` };
+        give(s, pid, -spec.price, spec.name);
+        give(s, pid, -tax, "налог на роскошь");
+        s.jackpot += Math.round(tax * 0.1);
+        pl.lux.push({ id: s.nextLuxId++, kind: a.kind, value: spec.price, paid: spec.price });
+        const text = `${pl.name} покупает: ${spec.name} (статус +${spec.fame}★)`;
+        emit(s, { type: "lux", player: pid, kind: a.kind, text });
+        log(s, text);
+        return { ok: true };
+      }
+      if (a.t === "sellLux") {
+        const it = pl.lux.find((l) => l.id === a.id);
+        if (!it) return { ok: false, error: "Нет такой вещи" };
+        pl.lux = pl.lux.filter((l) => l !== it);
+        give(s, pid, it.value, `продажа: ${LUX[it.kind].name}`);
+        log(s, `${pl.name} продаёт: ${LUX[it.kind].name} за ${it.value}`);
+        return { ok: true };
+      }
+      if (a.t === "experience") {
+        const spec = EXPERIENCES[a.kind];
+        if (!spec) return { ok: false, error: "Нет такого" };
+        if (hasBuff(s, pid, a.kind)) return { ok: false, error: "Уже действует — подождите, пока закончится" };
+        const cost = expCost(a.kind), tax = cost - spec.price;
+        if (pl.money < cost) return { ok: false, error: `Нужно ${cost}` };
+        give(s, pid, -spec.price, spec.name);
+        if (tax > 0) { give(s, pid, -tax, "налог на роскошь"); s.jackpot += Math.round(tax * 0.1); }
+        const onYacht = a.kind === "party" && hasLux(s, pid, "yacht");
+        pl.buffs.push({ kind: a.kind, rounds: spec.rounds, fame: spec.fame * (onYacht ? 2 : 1) });
+        if (a.kind === "party") for (const p of Object.values(s.props)) if (p.owner === pid) { p.demand *= 1.05; clampDemand(p); }
+        if (a.kind === "gifts") pl.stash = Math.min(STASH_MAX, pl.stash + spec.price);
+        const text = a.kind === "party" ? `${pl.name} устраивает вечеринку${onYacht ? " на яхте" : ""}` : a.kind === "vacation" ? `${pl.name} уезжает на море` : `${pl.name} дарит подарки жене и детям`;
+        emit(s, { type: "lux", player: pid, kind: a.kind, text });
+        log(s, text);
+        return { ok: true };
+      }
+      const p = s.props[a.cell];
+      if (!p || p.owner !== pid) return { ok: false, error: "Реклама — только своей компании" };
+      if (p.mortgaged) return { ok: false, error: "Компания в залоге" };
+      if (p.ad) return { ok: false, error: "Реклама уже идёт" };
+      const spec = AD[a.kind];
+      if (!spec) return { ok: false, error: "Нет такой рекламы" };
+      const cost = adCost(s, pid, a.cell, a.kind);
+      if (pl.money < cost) return { ok: false, error: `Нужно ${cost}` };
+      give(s, pid, -cost, `реклама «${cell(a.cell).name}»`);
+      p.ad = { kind: a.kind, rounds: spec.rounds };
+      p.demand *= spec.demand; clampDemand(p);
+      emit(s, { type: "ad", player: pid, cell: a.cell, kind: a.kind });
+      log(s, `${pl.name} запускает «${spec.name}» для «${cell(a.cell).name}»`);
+      return { ok: true };
+    }
     case "bidShares": case "bidCompany": {
       if (s.phase !== "roll" && s.phase !== "end") return { ok: false, error: "Предложения — до броска или в конце хода" };
       const p = s.props[a.cell];
@@ -1317,7 +1562,7 @@ export function act(s: GameState, pid: number, a: Action): Result {
       pl.trades++;
       if (to.bot) {
         const fair = lotPrice(s, a.cell);
-        const ok = price <= fair * 1.15 && to.money - price * lots >= 250;
+        const ok = price <= fair * 1.15 / dealFactor(s, pid) && to.money - price * lots >= 250;
         if (!ok) { stockEvent(s, `${to.name} отказывается: ${lots * 10}% «${name}» за ${price * lots} — дорого`, [pid, a.to]); return { ok: true }; }
         executeOffer(s, o);
         return { ok: true };

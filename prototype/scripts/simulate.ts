@@ -2,6 +2,8 @@
 import { BOARD, BranchId } from "../src/engine/board";
 import { Personality, capital, newGame } from "../src/engine/engine";
 import { botStep } from "../src/engine/runner";
+import { botTuning } from "../src/engine/bots";
+for (const k of (process.env.OFF ?? "").split(",").filter(Boolean)) (botTuning as unknown as Record<string, boolean>)[k] = false;
 
 const N = Number(process.argv[2] ?? 2000);
 const LENGTH = (process.argv[3] ?? "quick") as "quick" | "classic";
