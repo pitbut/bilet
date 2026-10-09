@@ -2,6 +2,8 @@ import "./style.css";
 import { GameConfig, Personality } from "./engine/engine";
 import { App, PERSONALITY_NAMES, Speed } from "./ui/app";
 import { unlockAudio } from "./ui/sound";
+import { NetClient, NetHost } from "./net/session";
+import { FoundTable, pickDriver } from "./net/transport";
 
 window.addEventListener("pointerdown", unlockAudio);
 
@@ -12,7 +14,7 @@ const BOT_NAMES = ["Борис", "Семён", "Гена", "Тимур", "Оле
 
 const root = document.getElementById("app")!;
 
-interface Setup { mode: "solo" | "hotseat"; length: "quick" | "classic"; humans: string[]; bots: number; difficulty: "easy" | "normal" | "hard"; speed: Speed }
+interface Setup { mode: "solo" | "hotseat" | "network"; length: "quick" | "classic"; humans: string[]; bots: number; difficulty: "easy" | "normal" | "hard"; speed: Speed }
 const saved = (() => { try { return JSON.parse(localStorage.getItem("oligarh-setup") ?? "null") as Setup | null; } catch { return null; } })();
 const setup: Setup = saved ?? { mode: "solo", length: "quick", humans: ["Вы"], bots: 3, difficulty: "normal", speed: "normal" };
 
@@ -39,6 +41,135 @@ function field(label: string, ...kids: Node[]) {
   return d;
 }
 
+function modeField() {
+  return field("Режим", seg(setup.mode, [["solo", "Один против ботов"], ["hotseat", "Несколько на одном телефоне"], ["network", "Несколько телефонов"]], (v) => { setup.mode = v; }));
+}
+
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = "", text = "") {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text) e.textContent = text;
+  return e;
+}
+function btn(text: string, on: () => void, cls = "") { const b = el("button", cls, text); b.onclick = on; return b; }
+function save() { try { localStorage.setItem("oligarh-setup", JSON.stringify(setup)); } catch { /* приватный режим */ } }
+
+const driver = pickDriver();
+
+/** Сетевая игра: имя и кнопки «Создать стол» / «Найти стол». */
+function renderNetworkSetup(box: HTMLElement) {
+  box.append(modeField());
+  const name = el("input");
+  name.value = setup.humans[0] ?? "Игрок";
+  name.maxLength = 14;
+  name.oninput = () => { setup.humans[0] = name.value || "Игрок"; };
+  const names = el("div", "names"); names.append(name);
+  box.append(field("Ваше имя", names));
+  box.append(field("Анимация на этом телефоне", seg(setup.speed, [["normal", "Обычная"], ["fast", "Быстрая"], ["instant", "Мгновенно"]], (v) => { setup.speed = v; })));
+  box.append(field("Связь", el("div", "netlabel", driver.kind === "bluetooth"
+    ? "Bluetooth: телефоны рядом, интернет не нужен. Один создаёт стол, остальные его находят."
+    : driver.label + ". Откройте игру в нескольких вкладках: в одной создайте стол, в других найдите его.")));
+  const row = el("div", "netbtns");
+  row.append(btn("Создать стол", () => { save(); void hostLobby(); }, "primary big"), btn("Найти стол", () => { save(); void findTables(); }, "big ghostlight"));
+  box.append(row);
+  root.append(box);
+}
+
+function screen(titleText: string, subText = "") {
+  root.replaceChildren();
+  const box = el("div", "setup");
+  box.append(el("h1", "", "ОЛИГАРХ"), el("p", "muted", titleText));
+  if (subText) box.append(el("p", "muted small", subText));
+  root.append(box);
+  return box;
+}
+
+function seatList(seats: { name: string; kind: string }[]) {
+  const list = el("div", "seats");
+  for (const st of seats) list.append(el("div", `seat ${st.kind}`, `${st.kind === "host" ? "👑 " : st.kind === "bot" ? "🤖 " : "📱 "}${st.name}`));
+  return list;
+}
+
+/** Хозяин стола: ждём гостей, выбираем ботов и длину, начинаем. */
+async function hostLobby() {
+  const myName = setup.humans[0] ?? "Хозяин";
+  let tr;
+  try { tr = await driver.host(`Стол ${myName}`); } catch (e) { const b = screen("Не удалось создать стол", String(e)); b.append(btn("Назад", () => renderSetup(), "big ghostlight")); return; }
+  const host = new NetHost(tr, myName);
+  const draw = () => {
+    const box = screen(`Ваш стол: «Стол ${myName}»`, driver.kind === "bluetooth" ? "Пусть остальные нажмут «Найти стол» — телефон виден по Bluetooth." : "В другой вкладке выберите «Несколько телефонов» → «Найти стол».");
+    const humans = host.seats();
+    const maxBots = 6 - humans.length;
+    setup.bots = Math.min(setup.bots, maxBots);
+    const bots: { name: string; kind: string }[] = Array.from({ length: setup.bots }, (_, k) => ({ name: `${PERSONALITY_NAMES[PERS[k % 4]]} ${BOT_NAMES[k]}`, kind: "bot" }));
+    box.append(field(`За столом (${humans.length + setup.bots} из 6)`, seatList([...humans, ...bots])));
+    const opts: [string, string][] = [];
+    for (let k = 0; k <= maxBots; k++) opts.push([String(k), String(k)]);
+    box.append(field("Боты", seg2(String(setup.bots), opts, (v) => { setup.bots = Number(v); draw(); })));
+    box.append(field("Длина партии", seg2(setup.length, [["quick", "Быстрая · 15 раундов"], ["classic", "Классика"]], (v) => { setup.length = v; draw(); })));
+    box.append(field("Анимация на этом телефоне", seg2(setup.speed, [["normal", "Обычная"], ["fast", "Быстрая"], ["instant", "Мгновенно"]], (v) => { setup.speed = v; draw(); })));
+    const go = btn(humans.length + setup.bots >= 2 ? "Начать игру" : "Нужен хотя бы один соперник", () => startHost(host), "primary big");
+    go.disabled = humans.length + setup.bots < 2;
+    box.append(go, btn("Закрыть стол", () => { host.close(); renderSetup(); }, "big ghostlight"));
+  };
+  host.onLobby = draw;
+  draw();
+}
+
+function seg2<T extends string>(value: T, options: [T, string][], onChange: (v: T) => void) {
+  const e = el("div", "seg");
+  for (const [v, label] of options) { const b = btn(label, () => onChange(v), v === value ? "on" : ""); e.append(b); }
+  return e;
+}
+
+function startHost(host: NetHost) {
+  save();
+  const players: GameConfig["players"] = host.assignSeats().map((name) => ({ name, bot: false, token: "", color: "" }));
+  for (let k = 0; k < setup.bots && players.length < 6; k++) {
+    const pers = PERS[k % PERS.length];
+    players.push({ name: `${PERSONALITY_NAMES[pers]} ${BOT_NAMES[k]}`, bot: true, personality: pers, difficulty: setup.difficulty, token: "", color: "" });
+  }
+  players.forEach((p, i) => { p.token = TOKENS[i]; p.color = COLORS[i]; });
+  root.replaceChildren();
+  const app = new App(root, () => { host.close(); location.reload(); });
+  void app.start({ players, mode: "network", length: setup.length }, setup.speed, host);
+}
+
+/** Гость: ищем столы рядом. */
+async function findTables() {
+  const box = screen("Ищем столы рядом…", driver.kind === "bluetooth" ? "Включите Bluetooth. Хозяин стола должен нажать «Создать стол»." : "Столы из других вкладок появятся здесь.");
+  const list = el("div", "tables");
+  box.append(list, btn("Назад", () => { stop(); renderSetup(); }, "big ghostlight"));
+  const found = new Map<string, FoundTable>();
+  let stop = () => {};
+  try {
+    stop = await driver.scan((t) => {
+      if (found.has(t.id)) return;
+      found.set(t.id, t);
+      list.append(btn(`🎲 ${t.name}`, () => { stop(); void join(t); }, "big tablebtn"));
+    });
+  } catch (e) { box.append(el("p", "muted", `Поиск не удался: ${String(e)}`)); }
+}
+
+async function join(t: FoundTable) {
+  const box = screen(`Подключаемся к «${t.name}»…`);
+  let tr;
+  try { tr = await driver.join(t.id); } catch (e) { box.append(el("p", "muted", `Не удалось подключиться: ${String(e)}`), btn("Назад", () => renderSetup(), "big ghostlight")); return; }
+  const client = new NetClient(tr, setup.humans[0] ?? "Гость");
+  const wait = () => {
+    const b = screen(`Вы за столом «${t.name}»`, "Ждём, пока хозяин начнёт игру…");
+    b.append(field("За столом", seatList(client.seats)), btn("Выйти", () => { client.close(); renderSetup(); }, "big ghostlight"));
+  };
+  client.onLobby = wait;
+  client.onLost = (why) => { const b = screen("Отключено", why); b.append(btn("В меню", () => renderSetup(), "primary big")); };
+  client.onStart = (state, seat) => {
+    root.replaceChildren();
+    const app = new App(root, () => { client.close(); location.reload(); });
+    void app.startClient(client, state, seat, setup.speed);
+  };
+  wait();
+}
+
 function renderSetup() {
   root.replaceChildren();
   const box = document.createElement("div");
@@ -50,13 +181,14 @@ function renderSetup() {
   sub.textContent = "Прототип · стройки на время, казино, российские города";
   box.append(title, sub);
 
-  if (setup.mode === "solo") setup.humans = setup.humans.slice(0, 1);
+  if (setup.mode !== "hotseat") setup.humans = setup.humans.slice(0, 1);
   if (setup.mode === "hotseat" && setup.humans.length < 2) setup.humans = [setup.humans[0] ?? "Игрок 1", "Игрок 2"];
   const maxBots = 6 - setup.humans.length;
   const minBots = setup.mode === "solo" ? 1 : 0;
+  if (setup.mode === "network") { renderNetworkSetup(box); return; }
   setup.bots = Math.max(minBots, Math.min(maxBots, setup.bots));
 
-  box.append(field("Режим", seg(setup.mode, [["solo", "Один против ботов"], ["hotseat", "Несколько на одном телефоне"]], (v) => { setup.mode = v; })));
+  box.append(modeField());
   box.append(field("Длина партии", seg(setup.length, [["quick", "Быстрая · 15 раундов"], ["classic", "Классика"]], (v) => { setup.length = v; })));
 
   const names = document.createElement("div");

@@ -94,15 +94,17 @@ function stockMove(s: GameState, reserve: number): Action | null {
   const owned = Object.keys(s.props).map(Number).filter((i) => s.props[i].owner === pl.id && freeLots(s, pl.id, i) > 0);
   if (pl.money < reserve * 0.8 && owned.length) {
     const i = owned.sort((a, b) => lotPrice(s, b) - lotPrice(s, a))[0];
-    const human = s.players.find((p) => !p.bot && !p.bankrupt);
-    if (s.cfg.mode === "solo" && human && randInt(s, 10) < 4 && !s.offers.some((o) => o.from === pl.id)) {
+    const humans = s.players.filter((p) => !p.bot && !p.bankrupt);
+    const human = humans.length ? humans[randInt(s, humans.length)] : undefined;
+    if (s.cfg.mode !== "hotseat" && human && randInt(s, 10) < 4 && !s.offers.some((o) => o.from === pl.id)) {
       return { t: "offerShares", cell: i, lots: 1, to: human.id, price: Math.round(lotPrice(s, i) * 1.05) };
     }
     return { t: "listShares", cell: i, lots: 1 };
   }
   // богатый бот иногда сам предлагает человеку выкупить долю или всю компанию, если она закрывает его монополию
-  const human = s.players.find((p) => !p.bot && !p.bankrupt);
-  if (s.cfg.mode === "solo" && human && pl.money > reserve * 4 && randInt(s, 10) < 2 && !s.offers.some((o) => o.from === pl.id)) {
+  const people = s.players.filter((p) => !p.bot && !p.bankrupt);
+  const human = people.length ? people[randInt(s, people.length)] : undefined;
+  if (s.cfg.mode !== "hotseat" && human && pl.money > reserve * 4 && randInt(s, 10) < 2 && !s.offers.some((o) => o.from === pl.id)) {
     const theirs = Object.keys(s.props).map(Number).filter((i) => s.props[i].owner === human.id);
     const key = theirs.find((i) => {
       const ind = BOARD[i].industry;

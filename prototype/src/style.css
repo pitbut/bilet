@@ -229,3 +229,14 @@ label { display: flex; align-items: center; gap: 6px; font-size: 14px; }
 .branchlock { display: flex; gap: 8px; align-items: center; justify-content: space-between; font-size: 12px; color: var(--muted); background: #f6f4ef; border-radius: 10px; padding: 6px 8px; }
 .branchlock button { flex: none; }
 .ccard .small.ghost + .small.ghost { margin-top: 4px; }
+
+/* сетевая игра */
+.netlabel { color: #cfd8dc; font-size: 14px; line-height: 1.4; }
+.netbtns { width: min(560px, 100%); display: flex; flex-direction: column; gap: 8px; }
+button.ghostlight { background: rgba(255, 255, 255, 0.08); color: #f3efe6; border-color: rgba(255, 255, 255, 0.25); }
+.seats { display: flex; flex-direction: column; gap: 6px; }
+.seat { background: rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 10px 12px; color: #f3efe6; }
+.seat.host { border: 1px solid #e8c15a; }
+.tables { width: min(560px, 100%); display: flex; flex-direction: column; gap: 8px; min-height: 60px; }
+button.tablebtn { background: #e8c15a; color: #222; border-color: #e8c15a; font-weight: 700; }
+.setup .small { font-size: 13px; }

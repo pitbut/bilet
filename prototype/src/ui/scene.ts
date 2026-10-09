@@ -617,11 +617,19 @@ export class BoardScene {
 
   // ---------- Анимация ----------
 
+  /** Пропускать анимации (игра свёрнута или гость догоняет хозяина). */
+  skip = false;
+  /** Внешняя проверка «пора догонять» (у гостя — длина очереди от хозяина). */
+  lagging: () => boolean = () => false;
+  private get fastForward() { return this.skip || document.hidden || this.lagging(); }
+
   tween(sec: number, fn: (k: number) => void): Promise<void> {
+    if (this.fastForward) { fn(1); return Promise.resolve(); }
     return new Promise((res) => {
       const t0 = performance.now();
       const step = () => {
-        const k = Math.min(1, (performance.now() - t0) / (sec * 1000));
+        // свернули игру посреди анимации — сразу к концу (кадры в фоне не рисуются)
+        const k = this.fastForward ? 1 : Math.min(1, (performance.now() - t0) / (sec * 1000));
         fn(k);
         if (k < 1) requestAnimationFrame(step); else res();
       };
@@ -629,7 +637,7 @@ export class BoardScene {
     });
   }
 
-  wait(sec: number) { return new Promise<void>((r) => setTimeout(r, sec * 1000)); }
+  wait(sec: number) { return this.fastForward ? Promise.resolve() : new Promise<void>((r) => setTimeout(r, sec * 1000)); }
 
   /** Возвращает камеру в исходный обзор всего поля. */
   resetView() {

@@ -5,7 +5,8 @@ import { BOARD, BranchId, CASINO_INDEX, Cell, IndustryId, PORT_INDICES, industry
 
 export type Personality = "shark" | "miser" | "gambler" | "trader";
 export type Difficulty = "easy" | "normal" | "hard";
-export type Mode = "solo" | "hotseat";
+/** solo — один человек и боты; hotseat — несколько людей на одном телефоне; network — каждый на своём телефоне. */
+export type Mode = "solo" | "hotseat" | "network";
 export type Length = "quick" | "classic";
 
 export interface PlayerConfig {
@@ -965,7 +966,7 @@ export function loungeMax(s: GameState, pid: number) { return Math.max(10, Math.
 /** Можно ли сейчас играть в «казино ожидания»: одиночная игра, ход соперника. */
 export function canLounge(s: GameState, pid: number): string | null {
   const pl = s.players[pid];
-  if (s.cfg.mode !== "solo") return "Казино ожидания — в игре против ботов";
+  if (s.cfg.mode === "hotseat") return "На одном телефоне казино ожидания нет";
   if (pid === s.current) return "Во время своего хода — только на клетке «Казино»";
   if (pl.loungeBets >= LOUNGE_MAX_BETS) return "Ставки на этот круг закончились";
   if (pl.money < 20) return "Мало денег";

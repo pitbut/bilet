@@ -1,6 +1,6 @@
 // Окно казино: рулетка с колесом, слоты с барабанами, блэкджек с картами, тотализатор.
 import {
-  Action, CasinoData, GameState, LOUNGE_MAX_BETS, RED_NUMBERS, SLOT_SYMBOLS, TOTE_NAME, TOTE_PAY, ToteChoice, act, canLounge, handValue, loungeMax,
+  Action, CasinoData, GameEvent, GameState, LOUNGE_MAX_BETS, RED_NUMBERS, Result, SLOT_SYMBOLS, TOTE_NAME, TOTE_PAY, ToteChoice, canLounge, handValue, loungeMax,
 } from "../engine/engine";
 import { sfx } from "./sound";
 
@@ -24,7 +24,10 @@ function btn(label: string, on: () => void, cls = "") {
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export interface CasinoHost {
-  s: GameState;
+  /** Текущее состояние (у гостя оно меняется по сети). */
+  readonly s: GameState;
+  /** Сделать ставку: локально или через хозяина стола. */
+  act: (a: Action) => Promise<{ r: Result; events: GameEvent[] }>;
   pid: number;
   /** true — «казино ожидания» в чужой ход, false — клетка «Казино» в свой ход. */
   lounge: boolean;
@@ -112,13 +115,13 @@ export class CasinoView {
     return row;
   }
 
-  /** Выполняет ставку в движке и возвращает данные её события. */
-  private bet(a: Action, game: string): { win: number; detail: string; data?: CasinoData } | null {
-    const s = this.h.s;
-    const n0 = s.events.length;
-    const r = act(s, this.h.pid, a);
+  /** Выполняет ставку и возвращает данные её события. */
+  private async bet(a: Action, game: string): Promise<{ win: number; detail: string; data?: CasinoData } | null> {
+    this.busy = true;
+    const { r, events } = await this.h.act(a);
+    this.busy = false;
     if (!r.ok) { this.result.textContent = r.error ?? "Нельзя"; sfx.alert(); return null; }
-    const ev = s.events.slice(n0).reverse().find((e) => e.type === "casino" && e.game === game);
+    const ev = events.slice().reverse().find((e) => e.type === "casino" && e.game === game);
     return ev && ev.type === "casino" ? { win: ev.win, detail: ev.detail, data: ev.data } : { win: 0, detail: "" };
   }
 
@@ -167,7 +170,7 @@ export class CasinoView {
 
   private async spin(choice: "red" | "black" | "even" | "odd" | number) {
     if (this.busy) return;
-    const r = this.bet({ ...(this.h.lounge ? { t: "lounge", game: "roulette", choice } : { t: "roulette", choice }), amount: this.stake } as Action, "Рулетка");
+    const r = await this.bet({ ...(this.h.lounge ? { t: "lounge", game: "roulette", choice } : { t: "roulette", choice }), amount: this.stake } as Action, "Рулетка");
     if (!r) return;
     this.busy = true;
     this.result.textContent = "Ставки сделаны, ставок больше нет…";
@@ -210,7 +213,7 @@ export class CasinoView {
 
   private async pull() {
     if (this.busy) return;
-    const r = this.bet({ ...(this.h.lounge ? { t: "lounge", game: "slots" } : { t: "slots" }), amount: this.stake } as Action, "Слоты");
+    const r = await this.bet({ ...(this.h.lounge ? { t: "lounge", game: "slots" } : { t: "slots" }), amount: this.stake } as Action, "Слоты");
     if (!r) return;
     this.busy = true;
     const reels = [...this.stage.querySelectorAll<HTMLDivElement>(".reel")];
@@ -263,7 +266,7 @@ export class CasinoView {
 
   private async bjDeal() {
     if (this.busy) return;
-    const r = this.bet({ ...(this.h.lounge ? { t: "loungeBj" } : { t: "bjStart" }), amount: this.stake } as Action, "Блэкджек");
+    const r = await this.bet({ ...(this.h.lounge ? { t: "loungeBj" } : { t: "bjStart" }), amount: this.stake } as Action, "Блэкджек");
     if (!r) return;
     sfx.card();
     this.stage.replaceChildren(); this.controls.replaceChildren();
@@ -275,7 +278,7 @@ export class CasinoView {
 
   private async bjMove(t: "bjHit" | "bjStand") {
     if (this.busy) return;
-    const r = this.bet({ t }, "Блэкджек");
+    const r = await this.bet({ t }, "Блэкджек");
     if (!r) return;
     sfx.card();
     this.stage.replaceChildren(); this.controls.replaceChildren();
@@ -296,8 +299,8 @@ export class CasinoView {
       pl.tote ? el("div", "tote-cur", `Ваша ставка: ${pl.tote.amount} на «${TOTE_NAME[pl.tote.choice]}» — ждём бросок`) : ""));
     const row = el("div", "cas-bets");
     for (const c of ["low", "seven", "high"] as ToteChoice[]) {
-      row.append(btn(`${TOTE_NAME[c]} ×${String(TOTE_PAY[c]).replace(".", ",")}`, () => {
-        const r = this.bet({ t: "tote", choice: c, amount: this.stake }, "Тотализатор");
+      row.append(btn(`${TOTE_NAME[c]} ×${String(TOTE_PAY[c]).replace(".", ",")}`, async () => {
+        const r = await this.bet({ t: "tote", choice: c, amount: this.stake }, "Тотализатор");
         if (r !== null) { sfx.coin(); this.result.textContent = `Ставка ${this.stake} на «${TOTE_NAME[c]}» принята`; this.render(); this.h.after(); }
       }, c === "seven" ? "primary" : ""));
     }
