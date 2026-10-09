@@ -3,3 +3,4 @@ prototype/dist/
 prototype/public/models/
 __pycache__/
 *.log
+*.apk
