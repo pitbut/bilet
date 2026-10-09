@@ -50,7 +50,8 @@ export interface Player extends PlayerConfig {
 export type ToteChoice = "low" | "seven" | "high";
 export interface Blackjack { bet: number; player: number[]; dealer: number[]; lounge: boolean }
 export interface Listing { seller: number; lots: number }
-export interface Offer { id: number; from: number; to: number; cell: number; lots: number; price: number }
+/** sell — from продаёт to; bid — from хочет купить у to. whole — выкуп всей компании (price — общая сумма), иначе price — за 10%. */
+export interface Offer { id: number; kind: "sell" | "bid"; from: number; to: number; cell: number; lots: number; price: number; whole?: boolean }
 
 export interface Construction {
   target: number; // строящийся уровень 1..3
@@ -160,6 +161,8 @@ export type Action =
   | { t: "unlistShares"; cell: number }
   | { t: "buyShares"; cell: number; lots: number }
   | { t: "offerShares"; cell: number; lots: number; to: number; price: number }
+  | { t: "bidShares"; cell: number; lots: number; price: number }
+  | { t: "bidCompany"; cell: number; price: number }
   | { t: "acceptOffer"; id: number }
   | { t: "declineOffer"; id: number }
   | { t: "leaveCasino" }
@@ -168,7 +171,7 @@ export type Action =
   | { t: "stay" }
   | { t: "endTurn" };
 
-export interface Result { ok: boolean; error?: string }
+export interface Result { ok: boolean; error?: string; info?: string }
 
 // ---------- Константы баланса ----------
 
@@ -182,6 +185,8 @@ export const BRANCH_MULT: Record<BranchId, number[]> = { rent: [4, 10, 20], inco
 export const INCOME_SHARE = [0.04, 0.08, 0.15];
 export const TRANSPORT_RENT = [25, 50, 100, 200];
 export const MAX_CONSTRUCTIONS = 3;
+/** Отработка: аренда на 10% меньше, но пропуск следующего хода. */
+export const WORKOFF_DISCOUNT = 0.1;
 export const RED_NUMBERS = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
 export const SLOT_SYMBOLS = ["Нефть", "Газ", "Металл", "Лес", "Зерно", "Кремль"];
 
@@ -263,6 +268,7 @@ export function buildCost(s: GameState, pid: number, idx: number, level: number)
   let c = (cell(idx).price ?? 0) * BUILD_COST[level - 1];
   if (hasSpecial(s, pid, "forest")) c *= 0.85;
   if (s.market?.buildCost) c *= s.market.buildCost;
+  c *= 1 - PUBLIC_BUILD_DISCOUNT * soldLots(s.props[idx]); // деньги инвесторов удешевляют стройку
   return Math.round(c);
 }
 
@@ -273,6 +279,7 @@ function speedFor(s: GameState, pid: number, idx: number, rush: boolean) {
   if ([12, 28].some((i) => owns(s, pid, i))) sp *= 1.15;
   const ind = cell(idx).industry;
   if (ind && s.market?.slow?.includes(ind)) sp *= 0.5;
+  sp *= 1 + PUBLIC_BUILD_SPEED * soldLots(s.props[idx]);
   return sp;
 }
 
@@ -307,6 +314,7 @@ export function rentFor(s: GameState, idx: number, diceSum = 7): number {
     r *= s.market?.rent[c.industry!] ?? 1;
     if (p.fastBonus) r *= 1.2;
   }
+  r *= 1 + PUBLIC_RENT_BONUS * soldLots(p); // публичная компания известнее — аренда выше
   return Math.round(r);
 }
 
@@ -324,6 +332,12 @@ export function capital(s: GameState, pid: number): number {
 // ---------- Биржа ----------
 
 export const LOTS = 10; // компания делится на 10 лотов по 10%
+/** Выгоды публичной компании за каждые 10% у акционеров. */
+export const PUBLIC_RENT_BONUS = 0.05;
+export const PUBLIC_BUILD_DISCOUNT = 0.05;
+export const PUBLIC_BUILD_SPEED = 0.1;
+/** С 20% у акционеров компанию нельзя забрать «Слиянием». */
+export const PUBLIC_PROTECT_LOTS = 2;
 export const OWNER_MIN_LOTS = 6; // владелец всегда держит не меньше 60%
 
 /** Стоимость компании: цена клетки и вложения × спрос на акции × рыночное событие. */
@@ -407,17 +421,41 @@ function buyLots(s: GameState, buyer: number, idx: number, lots: number): number
   return bought;
 }
 
-/** Исполняет прямую сделку: покупатель платит продавцу, лоты переходят. */
+/** Исполняет прямую сделку: покупатель платит продавцу, лоты (или вся компания) переходят. */
 function executeOffer(s: GameState, o: Offer): boolean {
-  const p = s.props[o.cell], buyer = s.players[o.to];
-  if (freeLots(s, o.from, o.cell) < o.lots || buyer.money < o.price * o.lots) return false;
-  give(s, o.to, -o.price * o.lots, `акции «${cell(o.cell).name}»`);
-  give(s, o.from, o.price * o.lots, `продажа акций «${cell(o.cell).name}»`);
-  for (let k = 0; k < o.lots; k++) moveLot(p, o.from, o.to);
+  const p = s.props[o.cell];
+  const seller = o.kind === "sell" ? o.from : o.to, buyer = o.kind === "sell" ? o.to : o.from;
+  const name = cell(o.cell).name;
+  if (o.whole) {
+    if (p.owner !== seller || s.players[buyer].money < o.price) return false;
+    give(s, buyer, -o.price, `выкуп «${name}»`);
+    give(s, seller, o.price, `продажа «${name}»`);
+    transferCompany(s, o.cell, buyer);
+    p.demand = Math.min(3, p.demand * 1.05);
+    emit(s, { type: "buy", player: buyer, cell: o.cell });
+    stockEvent(s, `${s.players[buyer].name} выкупает «${name}» у ${s.players[seller].name} за ${o.price}`, [seller, buyer]);
+    return true;
+  }
+  if (freeLots(s, seller, o.cell) < o.lots || s.players[buyer].money < o.price * o.lots) return false;
+  give(s, buyer, -o.price * o.lots, `акции «${name}»`);
+  give(s, seller, o.price * o.lots, `продажа акций «${name}»`);
+  for (let k = 0; k < o.lots; k++) moveLot(p, seller, buyer);
   p.demand *= Math.pow(1.04, o.lots);
   clampDemand(p);
-  stockEvent(s, `${buyer.name} покупает у ${s.players[o.from].name} ${o.lots * 10}% «${cell(o.cell).name}» за ${o.price * o.lots}`, [o.from, o.to]);
+  stockEvent(s, `${s.players[buyer].name} покупает у ${s.players[seller].name} ${o.lots * 10}% «${name}» за ${o.price * o.lots}`, [seller, buyer]);
   return true;
+}
+
+/** Сколько бот-владелец хочет за компанию целиком (сумма) или за 10% (цена лота). */
+export function botAsk(s: GameState, owner: number, idx: number, whole: boolean, buyer: number): number | null {
+  const pl = s.players[owner], p = s.props[idx], c = cell(idx);
+  const greed = { shark: 1.3, miser: 1.15, gambler: 1.0, trader: 1.1 }[pl.personality ?? "trader"];
+  const poor = pl.money < 250 ? 0.85 : 1;
+  if (!whole) return freeLots(s, owner, idx) > 0 ? Math.round(lotPrice(s, idx) * (greed - 0.05) * poor) : null;
+  let ask = companyValue(s, idx) * ownerLots(p) / LOTS + rentFor(s, idx) * 4;
+  if (c.industry && hasMonopoly(s, owner, c.industry)) ask *= 2.2; // свою монополию просто так не отдаст
+  if (c.industry && industryCells(c.industry).filter((i) => i !== idx).every((i) => owns(s, buyer, i))) ask *= 1.6; // покупателю она нужна для монополии
+  return Math.round(ask * greed * poor);
 }
 
 export function canBuild(s: GameState, pid: number, idx: number): { ok: boolean; reason?: string; cost?: number; level?: number } {
@@ -443,6 +481,7 @@ export function canTakeover(s: GameState, pid: number, idx: number): { ok: boole
   if (!p || c.kind !== "business") return { ok: false, reason: "Только для бизнесов" };
   if (p.owner === null || p.owner === pid) return { ok: false, reason: "Клетка не у соперника" };
   if (p.level > 0 || p.construction || p.mortgaged) return { ok: false, reason: "На клетке уже стройка или залог" };
+  if (soldLots(p) >= PUBLIC_PROTECT_LOTS) return { ok: false, reason: "Публичная компания: акционеры (20%+) против слияния" };
   const others = industryCells(c.industry!).filter((i) => i !== idx);
   if (!others.every((i) => owns(s, pid, i))) return { ok: false, reason: "Нужны все остальные клетки отрасли" };
   const cost = c.price! * 2;
@@ -642,6 +681,7 @@ function addProgress(s: GameState, idx: number, amount: number) {
   }
   if (c.progress >= 99.999) {
     p.level = c.target;
+    p.demand = Math.min(3, p.demand * 1.1); // новый уровень — акции дорожают
     p.construction = null;
     const fast = c.ticks < c.nominalTicks;
     p.fastBonus = fast;
@@ -989,7 +1029,7 @@ export function act(s: GameState, pid: number, a: Action): Result {
     const o = s.offers.find((x) => x.id === a.id && x.to === pid);
     if (!o) return { ok: false, error: "Предложение уже неактуально" };
     s.offers = s.offers.filter((x) => x !== o);
-    if (a.t === "declineOffer") { stockEvent(s, `${pl.name} отказывается от акций «${cell(o.cell).name}»`, [o.from, pid]); return { ok: true }; }
+    if (a.t === "declineOffer") { stockEvent(s, `${pl.name} отклоняет предложение по «${cell(o.cell).name}»`, [o.from, pid]); return { ok: true }; }
     return executeOffer(s, o) ? { ok: true } : { ok: false, error: "Сделка не прошла: нет денег или лотов" };
   }
   if (a.t === "tap") {
@@ -1042,11 +1082,11 @@ export function act(s: GameState, pid: number, a: Action): Result {
         p.fastBonus = false;
         log(s, `${pl.name} платит аренду ${amount} → ${s.players[owner].name}`);
       } else {
-        give(s, owner, Math.round(amount * 0.3), `отработка в «${cell(idx).name}»`);
-        shareOut(s, idx, Math.round(amount * 0.3), "отработка");
+        const part = Math.round(amount * (1 - WORKOFF_DISCOUNT));
+        if (charge(s, pid, part, owner, `аренда со скидкой «${cell(idx).name}»`)) shareOut(s, idx, part, "аренда");
         if (p.construction) addProgress(s, idx, 20);
         pl.skipNext = true;
-        log(s, `${pl.name} отрабатывает аренду и пропустит ход`);
+        log(s, `${pl.name} отрабатывает: платит ${part} вместо ${amount} и пропустит ход`);
       }
       if (cell(idx).industry === "tourism" && p.branch === "special" && p.level >= 1 && !pl.bankrupt) {
         pl.skipNext = true;
@@ -1091,6 +1131,33 @@ export function act(s: GameState, pid: number, a: Action): Result {
       log(s, `${pl.name} выкупает «${cell(a.cell).name}» у ${s.players[prev].name} за ${chk.cost} — монополия!`);
       return { ok: true };
     }
+    case "bidShares": case "bidCompany": {
+      if (s.phase !== "roll" && s.phase !== "end") return { ok: false, error: "Предложения — до броска или в конце хода" };
+      const p = s.props[a.cell];
+      if (!p || p.owner === null || p.owner === pid) return { ok: false, error: "Это не чужая компания" };
+      const owner = s.players[p.owner], name = cell(a.cell).name;
+      const whole = a.t === "bidCompany";
+      const lots = whole ? 0 : Math.max(1, Math.round(a.lots));
+      const price = Math.max(1, Math.round(a.price));
+      const total = whole ? price : price * lots;
+      if (pl.money < total) return { ok: false, error: "Не хватает денег на такое предложение" };
+      if (!whole && freeLots(s, p.owner, a.cell) < lots) return { ok: false, error: `Владелец может продать не больше ${freeLots(s, p.owner, a.cell) * 10}%` };
+      if (s.offers.some((o) => o.from === pid && o.cell === a.cell && o.kind === "bid")) return { ok: false, error: "Предложение уже отправлено" };
+      const o: Offer = { id: s.nextOfferId++, kind: "bid", from: pid, to: p.owner, cell: a.cell, lots, price, whole };
+      pl.trades++;
+      const what = whole ? `«${name}» целиком за ${total}` : `${lots * 10}% «${name}» за ${total}`;
+      if (owner.bot) {
+        const ask = botAsk(s, p.owner, a.cell, whole, pid);
+        const askTotal = ask === null ? null : whole ? ask : ask * lots;
+        if (askTotal !== null && total >= askTotal) { executeOffer(s, o); return { ok: true, info: `${owner.name} согласен!` }; }
+        const info = askTotal === null ? `${owner.name} не продаёт` : `${owner.name} отказывается — хочет не меньше ${askTotal}`;
+        stockEvent(s, `${pl.name} предлагает ${owner.name} ${what} — ${info.replace(`${owner.name} `, "")}`, [pid, p.owner]);
+        return { ok: true, info };
+      }
+      s.offers.push(o);
+      stockEvent(s, `${pl.name} хочет купить у ${owner.name} ${what}`, [pid, p.owner]);
+      return { ok: true, info: `Предложение отправлено ${owner.name}` };
+    }
     case "listShares": case "unlistShares": case "buyShares": case "offerShares": {
       if (s.phase !== "roll" && s.phase !== "end") return { ok: false, error: "Биржа — до броска или в конце хода" };
       if (!tradable(s, a.cell)) return { ok: false, error: "У компании нет владельца" };
@@ -1121,7 +1188,7 @@ export function act(s: GameState, pid: number, a: Action): Result {
       const to = s.players[a.to];
       if (!to || to.bankrupt || a.to === pid) return { ok: false, error: "Некому предложить" };
       const price = Math.max(1, Math.round(a.price));
-      const o: Offer = { id: s.nextOfferId++, from: pid, to: a.to, cell: a.cell, lots, price };
+      const o: Offer = { id: s.nextOfferId++, kind: "sell", from: pid, to: a.to, cell: a.cell, lots, price };
       pl.trades++;
       if (to.bot) {
         const fair = lotPrice(s, a.cell);

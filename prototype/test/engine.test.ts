@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GameConfig, GameState, act, capital, companyValue, handValue, lotPrice, newGame, rentFor } from "../src/engine/engine";
+import { GameConfig, GameState, act, buildCost, canTakeover, capital, companyValue, handValue, lotPrice, newGame, rentFor } from "../src/engine/engine";
 import { playOut } from "../src/engine/runner";
 
 const players = (n: number, bot = false): GameConfig["players"] =>
@@ -304,5 +304,61 @@ describe("казино", () => {
     while (s.players[0].bj && guard++ < 10) act(s, 0, { t: "bjStand" });
     expect(s.players[0].bj).toBeNull();
     expect(s.events.some((e) => e.type === "casino" && e.game === "Блэкджек" && e.data?.done)).toBe(true);
+  });
+});
+
+describe("отработка, сделки с чужими компаниями, выгоды акций", () => {
+  const withBots = () => newGame({ players: [
+    { name: "Я", bot: false, token: "", color: "" },
+    { name: "Акула", bot: true, personality: "shark", difficulty: "normal", token: "", color: "" },
+    { name: "Скряга", bot: true, personality: "miser", difficulty: "normal", token: "", color: "" },
+  ], mode: "solo", length: "classic", seed: 7 });
+
+  it("отработка: платишь 90% аренды и пропускаешь ход", () => {
+    const s = game(2);
+    s.props[39].owner = 1; s.props[39].level = 1; s.props[39].branch = "rent";
+    s.players[0].pos = 37;
+    roll(s, 1, 1);
+    const rent = (s.pending as { amount: number }).amount;
+    const o = s.players[1].money;
+    act(s, 0, { t: "workOff" });
+    expect(s.players[1].money - o).toBe(Math.round(rent * 0.9));
+    expect(s.players[0].skipNext).toBe(true);
+  });
+
+  it("предложение боту купить акции: мало — отказ с ценой, достаточно — сделка", () => {
+    const s = withBots();
+    s.props[39].owner = 1;
+    const low = act(s, 0, { t: "bidShares", cell: 39, lots: 1, price: 20 });
+    expect(low.ok).toBe(true);
+    expect(low.info).toMatch(/не меньше (\d+)/);
+    const ask = Number(low.info!.match(/не меньше (\d+)/)![1]);
+    s.players[0].trades = 0;
+    const ok = act(s, 0, { t: "bidShares", cell: 39, lots: 1, price: ask });
+    expect(ok.info).toMatch(/согласен/);
+    expect(s.props[39].holders[0]).toBe(1);
+  });
+
+  it("выкуп компании целиком у бота за достаточную сумму", () => {
+    const s = withBots();
+    s.props[21].owner = 2; // Сочи у Скряги
+    const r1 = act(s, 0, { t: "bidCompany", cell: 21, price: 100 });
+    const ask = Number(r1.info!.match(/не меньше (\d+)/)![1]);
+    expect(ask).toBeGreaterThan(220);
+    s.players[0].trades = 0;
+    act(s, 0, { t: "bidCompany", cell: 21, price: ask });
+    expect(s.props[21].owner).toBe(0);
+  });
+
+  it("публичная компания: аренда выше, стройка дешевле, слияние запрещено", () => {
+    const s = game(2);
+    s.props[37].owner = 0; s.props[39].owner = 1;
+    const rent0 = rentFor(s, 39), cost0 = buildCost(s, 1, 39, 1);
+    expect(canTakeover(s, 0, 39).ok).toBe(true);
+    s.props[39].holders = { 0: 2 };
+    expect(rentFor(s, 39)).toBe(Math.round(rent0 * 1.1));
+    expect(buildCost(s, 1, 39, 1)).toBe(Math.round(cost0 * 0.9));
+    expect(canTakeover(s, 0, 39).ok).toBe(false);
+    void capital; void companyValue; void lotPrice;
   });
 });

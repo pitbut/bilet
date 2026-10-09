@@ -1,6 +1,6 @@
 // Боты с характерами: Акула, Скряга, Игроман, Торгаш.
 import { BOARD, BranchId, industryCells } from "./board";
-import { Action, GameState, Personality, canBuild, canTakeover, freeLots, hasMonopoly, lotPrice, ownedCount, randInt, rentFor } from "./engine";
+import { Action, GameState, Personality, canBuild, canTakeover, companyValue, freeLots, hasMonopoly, lotPrice, ownedCount, randInt, rentFor } from "./engine";
 
 const RESERVE: Record<Personality, number> = { shark: 100, miser: 400, gambler: 150, trader: 250 };
 const BRANCH: Record<Personality, BranchId> = { shark: "rent", miser: "income", gambler: "special", trader: "rent" };
@@ -22,8 +22,9 @@ export function botAction(s: GameState): Action {
         return { t: buy ? "buy" : "decline" };
       }
       if (pend.kind !== "rent") return { t: "endTurn" };
-      const heavy = pend.amount > pl.money * 0.5;
-      return { t: heavy && (pers === "miser" || pl.money < pend.amount) ? "workOff" : "payRent" };
+      // отработка: −10% к аренде ценой пропуска хода — выгодна при крупной аренде
+      const heavy = pend.amount > pl.money * 0.4 || pend.amount >= 150;
+      return { t: heavy && (pers === "miser" || pers === "trader") ? "workOff" : "payRent" };
     }
     case "casino": {
       const wants = pers === "gambler" ? 3 : pers === "miser" ? 0 : 1;
@@ -90,6 +91,18 @@ function stockMove(s: GameState, reserve: number): Action | null {
       return { t: "offerShares", cell: i, lots: 1, to: human.id, price: Math.round(lotPrice(s, i) * 1.05) };
     }
     return { t: "listShares", cell: i, lots: 1 };
+  }
+  // богатый бот иногда сам предлагает человеку выкупить долю или всю компанию, если она закрывает его монополию
+  const human = s.players.find((p) => !p.bot && !p.bankrupt);
+  if (s.cfg.mode === "solo" && human && pl.money > reserve * 4 && randInt(s, 10) < 2 && !s.offers.some((o) => o.from === pl.id)) {
+    const theirs = Object.keys(s.props).map(Number).filter((i) => s.props[i].owner === human.id);
+    const key = theirs.find((i) => {
+      const ind = BOARD[i].industry;
+      return ind && industryCells(ind).filter((j) => j !== i).every((j) => s.props[j].owner === pl.id);
+    });
+    if (key !== undefined && pl.money > companyValue(s, key) * 2) return { t: "bidCompany", cell: key, price: Math.round(companyValue(s, key) * 1.6) };
+    const best = theirs.filter((i) => freeLots(s, human.id, i) > 0).sort((a, b) => rentFor(s, b) - rentFor(s, a))[0];
+    if (best !== undefined && rentFor(s, best) > 0) return { t: "bidShares", cell: best, lots: 1, price: Math.round(lotPrice(s, best) * 1.15) };
   }
   if (pl.money > reserve * 3) {
     let best: { i: number; y: number } | null = null;
