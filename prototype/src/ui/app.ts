@@ -4,7 +4,7 @@ import { isMuted, setMuted, sfx } from "./sound";
 import { BOARD, BRANCH_EFFECTS, BranchId, INDUSTRIES } from "../engine/board";
 import {
   Action, GameConfig, GameEvent, GameState, act, active, buildCost, canBuild, canLounge, canTakeover, capital, companyValue, drainEvents, freeLots,
-  INCOME_SHARE, PUBLIC_PROTECT_LOTS, WORKOFF_DISCOUNT, lotPrice, newGame, ownerLots, rentFor, soldLots,
+  INCOME_SHARE, LOAN_RATE, PUBLIC_PROTECT_LOTS, coopAnswer, loanLimit, WORKOFF_DISCOUNT, lotPrice, newGame, ownerLots, rentFor, soldLots,
 } from "../engine/engine";
 import { botStep } from "../engine/runner";
 import { BoardScene } from "./scene";
@@ -260,7 +260,7 @@ export class App {
     const others = button("👥 Игроки", () => this.showPlayers(), "small chipbtn");
     const turn = cur.id !== me.id ? h("div", { class: "chip turnchip" }, h("span", { class: "dot", style: `background:${cur.color}` }), `Ходит ${cur.name}`) : "";
     const offers = s.offers.filter((o) => o.to === me.id).length;
-    const exch = button(`📈 Биржа${offers ? ` · ${offers}` : ""}`, () => this.showExchange(), `small chipbtn${offers ? " hotbtn" : ""}`);
+    const exch = button(`📈 Биржа и банк${offers ? ` · ${offers}` : ""}`, () => this.showExchange(), `small chipbtn${offers ? " hotbtn" : ""}`);
     const lounge = s.cfg.mode === "solo" && s.current !== me.id && !me.bankrupt && s.phase !== "gameover"
       ? button("🎰 Казино", () => this.openCasino(true), `small chipbtn${canLounge(s, me.id) ? " dim" : ""} casbtn`) : "";
     this.bar.replaceChildren(chip, others, exch, lounge, turn);
@@ -466,6 +466,7 @@ export class App {
         const can = cur.money >= c.price!;
         body.append(h("div", { class: "tapzone" }, can ? `Тапните — купить за ${c.price}` : `Не хватает: нужно ${c.price}`));
         if (can) el.addEventListener("click", () => this.doAction({ t: "buy" }));
+        if (s.players.filter((x) => !x.bankrupt).length > 1) body.append(button("🤝 Купить в складчину", () => this.showCoop(pend.cell), "small ghost"));
         body.append(button("На аукцион", () => this.doAction({ t: "decline" }), "small ghost"));
       } else {
         body.append(h("div", { class: "tapzone" }, `Тапните — заплатить ${fmt(pend.amount)} → ${s.players[pend.owner].name}`));
@@ -557,6 +558,12 @@ export class App {
             () => { this.closeModal(); this.doAction({ t: "build", cell: i, rush: this.rush, insure: this.insure }); }, chk.ok ? "" : "disabled"));
         }
       }
+      if (c.kind === "business" && p.level >= 1 && p.branch && !p.construction) {
+        const others = (["rent", "income", "special"] as BranchId[]).filter((b) => b !== p.branch).map((b) => `«${INDUSTRIES[c.industry!].branches[b]}»`).join(" и ");
+        item.append(h("div", { class: "branchlock" },
+          h("span", {}, `Ветка выбрана: «${INDUSTRIES[c.industry!].branches[p.branch]}». ${others} закрыты — у здания одна ветка. Сменить можно, снеся постройки: вернётся ${fmt(p.invested / 2)}.`),
+          button("Снести", () => { const r = act(s, me.id, { t: "demolish", cell: i }); if (!r.ok) this.toast(r.error ?? "Нельзя", "warn"); else sfx.hammer(); void this.step(); this.showBuild(); }, "small ghost")));
+      }
       if (p.construction) {
         const cost = Math.round(buildCost(s, me.id, i, p.construction.target) * 0.1);
         acts.append(button(`Сверхурочные +25% — ${fmt(cost)}`, () => { this.doAction({ t: "overtime", cell: i }); this.showBuild(); }));
@@ -588,6 +595,90 @@ export class App {
     });
     this.openModal(view.root);
     this.modal.dataset.view = "casino";
+  }
+
+  /** Складчина: игрок сам выбирает, кого позвать и какие доли (по 10%, всего до 40%). */
+  private showCoop(cellI: number, note = "") {
+    const s = this.s, me = s.current, pl = s.players[me], c = BOARD[cellI], price = c.price!;
+    const others = s.players.filter((x) => x.id !== me && !x.bankrupt);
+    const sel: Record<number, HTMLSelectElement> = {};
+    const mineEl = h("b", {});
+    const update = () => {
+      const parts = others.reduce((t, x) => t + Math.ceil(price * Number(sel[x.id].value) / 10), 0);
+      const lots = others.reduce((t, x) => t + Number(sel[x.id].value), 0);
+      mineEl.textContent = lots > 4 ? "партнёрам не больше 40%" : `${fmt(price - parts)} (у вас ${fmt(pl.money)})`;
+    };
+    const rows = others.map((x) => {
+      sel[x.id] = h("select", { class: "who", id: `coop-${x.id}` }, ...[0, 1, 2, 3, 4].map((n) => h("option", { value: String(n) }, n ? `${n * 10}% — ${fmt(Math.ceil(price * n / 10))}` : "не звать"))) as HTMLSelectElement;
+      sel[x.id].addEventListener("change", update);
+      return h("div", { class: "prow" }, h("span", { class: "dot", style: `background:${x.color}` }), h("div", { class: "pname" }, h("b", {}, x.name), h("div", { class: "muted tiny" }, x.bot ? `бот · ${PERS_NAME[x.personality ?? "trader"]}` : "человек")), sel[x.id]);
+    });
+    const go = async () => {
+      let parts = others.map((x) => ({ pid: x.id, lots: Number(sel[x.id].value) })).filter((x) => x.lots > 0);
+      if (!parts.length) { this.showCoop(cellI, "Выберите хотя бы одного партнёра"); return; }
+      const declined: string[] = [];
+      for (const part of parts) {
+        const x = s.players[part.pid];
+        const yes = x.bot ? coopAnswer(s, part.pid, cellI, part.lots) : await this.askHuman(part.pid, `${pl.name} зовёт вас в складчину: ${part.lots * 10}% «${c.name}» за ${fmt(Math.ceil(price * part.lots / 10))}. Вы будете получать ${part.lots * 10}% аренды и дохода.`);
+        if (!yes) declined.push(x.name);
+      }
+      if (declined.length) {
+        sfx.alert();
+        parts = parts.filter((x) => !declined.includes(s.players[x.pid].name));
+        this.showCoop(cellI, `Отказались: ${declined.join(", ")}. Измените доли или позовите других.`);
+        return;
+      }
+      const r = act(s, me, { t: "buyCoop", partners: parts });
+      if (!r.ok) { sfx.alert(); this.showCoop(cellI, r.error ?? "Не получилось"); return; }
+      this.closeModal();
+      void this.step();
+    };
+    this.openModal(h("h2", {}, `«${c.name}» в складчину`),
+      h("div", { class: "muted" }, `Цена ${fmt(price)}. Партнёры платят свою часть и получают акции (до 40% на всех) — им будет идти их доля аренды. Клетка — ваша, вы управляете стройкой.`),
+      note ? h("div", { class: "deal-reply" }, note) : "",
+      h("div", { class: "plist" }, ...rows),
+      h("div", {}, "Ваша часть: ", mineEl),
+      h("div", { class: "row" }, button("Предложить", () => void go(), "primary"), button("Назад", () => this.closeModal(), "ghost")));
+    update();
+  }
+
+  /** Вопрос другому человеку (на одном телефоне — через «Передайте телефон»). */
+  private async askHuman(pid: number, question: string): Promise<boolean> {
+    const s = this.s, x = s.players[pid];
+    if (this.humans.length > 1) await this.passPhone(x.name, "вопрос о сделке");
+    return new Promise((res) => {
+      const done = (v: boolean) => { this.closeModal(); res(v); };
+      this.openModal(h("h2", {}, x.name), h("div", {}, question),
+        h("div", { class: "row" }, button("Согласен", () => done(true), "primary"), button("Нет", () => done(false))));
+      this.modal.querySelector(".close")!.addEventListener("click", () => res(false));
+    });
+  }
+
+  /** Банк: кредиты под залог своих компаний или акций. */
+  private bankSection(me: number, myTurn: boolean, run: (a: Action) => void): Node[] {
+    const s = this.s, pl = s.players[me];
+    const out: Node[] = [h("h3", {}, "🏦 Банк: кредит под залог")];
+    out.push(h("div", { class: "muted tiny" }, `До 60% стоимости залога. Проценты ${LOAN_RATE * 100}% от суммы каждый ваш ход. Срок — 5 раундов: не вернули — банк забирает залог. Компания в залоге продолжает приносить аренду.`));
+    for (const l of pl.loans) {
+      out.push(h("div", { class: "item offer" },
+        h("div", {}, h("b", {}, `Кредит ${fmt(l.amount)}`), ` под ${l.kind === "company" ? `«${BOARD[l.cell].name}»` : `акции «${BOARD[l.cell].name}»`} · вернуть до ${l.due}-го раунда (сейчас ${s.round})`),
+        h("div", { class: "row" }, button(`Погасить ${fmt(l.amount)}`, () => run({ t: "repayLoan", id: l.id }), myTurn && pl.money >= l.amount ? "primary" : "disabled"))));
+    }
+    const options: { cell: number; kind: "company" | "shares"; lim: number }[] = [];
+    for (const k of Object.keys(s.props).map(Number)) {
+      for (const kind of ["company", "shares"] as const) {
+        const lim = loanLimit(s, me, k, kind);
+        if (lim >= 10) options.push({ cell: k, kind, lim });
+      }
+    }
+    if (!options.length && !pl.loans.length) out.push(h("div", { class: "hint" }, "Нечего заложить: нужны свои компании (не в ипотечном залоге) или акции."));
+    for (const o of options) {
+      const amt = Object.assign(h("input", { type: "number", class: "price", min: "10", step: "10", id: `loan-${o.kind}-${o.cell}` }), { value: String(o.lim) });
+      out.push(h("div", { class: "item" },
+        h("div", {}, h("b", {}, o.kind === "company" ? `«${BOARD[o.cell].name}»` : `Акции «${BOARD[o.cell].name}»`), h("span", { class: "muted" }, ` · можно до ${fmt(o.lim)}`)),
+        h("div", { class: "row offerbox" }, amt, button("Взять кредит", () => run({ t: "takeLoan", cell: o.cell, kind: o.kind, amount: Number(amt.value) }), myTurn ? "" : "disabled"))));
+    }
+    return out;
   }
 
   /** Биржа: предложения, свои компании, свои акции и рынок. */
@@ -663,6 +754,8 @@ export class App {
       }
     }
 
+    sections.push(...this.bankSection(me, myTurn, run));
+
     const market = Object.keys(s.props).map(Number).filter((i) => s.props[i].listings.some((l) => l.seller !== me));
     sections.push(h("h3", {}, "Биржа"));
     if (!market.length) sections.push(h("div", { class: "hint" }, "Сейчас никто не продаёт акции."));
@@ -677,7 +770,7 @@ export class App {
         h("div", { class: "row" }, button(`Купить 10% за ${fmt(lotPrice(s, i))}`, () => run({ t: "buyShares", cell: i, lots: 1 }), myTurn && pl.money >= lotPrice(s, i) ? "primary" : "disabled"))));
     }
 
-    this.openModal(h("h2", {}, "Биржа"),
+    this.openModal(h("h2", {}, "Биржа и банк"),
       h("div", { class: "muted" }, myTurn
         ? "Цена растёт, когда акции покупают, и падает, когда их много в продаже. От цены зависит стоимость компании и ваш капитал."
         : "Покупать и выставлять акции можно в свой ход — до броска или в конце хода. Принять предложение можно в любой момент."),
@@ -764,6 +857,9 @@ export class App {
         "Выгода продажи акций: деньги сразу без залога; за каждые 10% у акционеров аренда +5%, стройка −5% и быстрее на 10%; с 20% у акционеров компанию нельзя отнять «Слиянием».",
         "Чужие деньги не видны, а карточки соперников — видны («👥 Игроки»): тапните по любой, чтобы предложить выкуп или купить акции.",
         "Отработка аренды: платите на 10% меньше, но пропускаете следующий ход.",
+        "Не хватает на покупку — «Купить в складчину»: позовите кого хотите и раздайте до 40% долей, они заплатят свою часть.",
+        "Банк («Биржа и банк»): кредит до 60% стоимости залога — своей компании или акций; 5% за ход, через 5 раундов не вернули — залог у банка.",
+        "У здания одна ветка развития: выбрали — остальные закрыты. Сменить можно, снеся постройки (вернётся 50% вложений).",
       ].map((t) => h("li", {}, t))));
   }
 

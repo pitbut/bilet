@@ -362,3 +362,58 @@ describe("отработка, сделки с чужими компаниями,
     void capital; void companyValue; void lotPrice;
   });
 });
+
+describe("складчина, кредиты, снос", () => {
+  const mixed = () => newGame({ players: [
+    { name: "Я", bot: false, token: "", color: "" },
+    { name: "Акула", bot: true, personality: "shark", difficulty: "normal", token: "", color: "" },
+    { name: "Скряга", bot: true, personality: "miser", difficulty: "normal", token: "", color: "" },
+  ], mode: "solo", length: "classic", seed: 3 });
+
+  it("покупка в складчину: партнёры платят свои доли и становятся акционерами", () => {
+    const s = mixed();
+    s.players[0].money = 250;
+    s.players[0].pos = 37;
+    roll(s, 1, 1); // Москва, 400
+    expect(s.pending).toMatchObject({ kind: "buy", cell: 39 });
+    expect(act(s, 0, { t: "buy" }).ok).toBe(false);
+    const r = act(s, 0, { t: "buyCoop", partners: [{ pid: 1, lots: 3 }, { pid: 2, lots: 1 }] });
+    expect(r.ok).toBe(true);
+    expect(s.props[39].owner).toBe(0);
+    expect(s.props[39].holders).toEqual({ 1: 3, 2: 1 });
+    expect(s.players[0].money).toBe(250 - 240); // партнёры заплатили 120 + 40
+  });
+
+  it("бот без денег отказывается войти в долю", () => {
+    const s = mixed();
+    s.players[2].money = 100;
+    s.players[0].pos = 37;
+    roll(s, 1, 1);
+    const r = act(s, 0, { t: "buyCoop", partners: [{ pid: 2, lots: 2 }] });
+    expect(r.ok).toBe(false);
+  });
+
+  it("кредит под залог компании: деньги сразу, проценты каждый ход, просрочка — банк забирает", () => {
+    const s = game(2);
+    s.props[39].owner = 0;
+    const lim = act(s, 0, { t: "takeLoan", cell: 39, kind: "company", amount: 10000 });
+    expect(lim.ok).toBe(false);
+    expect(act(s, 0, { t: "takeLoan", cell: 39, kind: "company", amount: 200 }).ok).toBe(true);
+    expect(s.players[0].money).toBe(1700);
+    pass(s); pass(s);
+    expect(s.players[0].money).toBe(1700 - 10); // 5% за ход
+    s.players[0].loans[0].due = 0;
+    pass(s); pass(s);
+    expect(s.props[39].owner).toBeNull();
+    expect(s.players[0].loans.length).toBe(0);
+  });
+
+  it("снос построек возвращает половину вложений и даёт выбрать другую ветку", () => {
+    const s = game(2);
+    s.props[39].owner = 0; s.props[39].level = 1; s.props[39].branch = "rent"; s.props[39].invested = 200;
+    expect(act(s, 0, { t: "demolish", cell: 39 }).ok).toBe(true);
+    expect(s.players[0].money).toBe(1600);
+    expect(s.props[39].branch).toBeNull();
+    expect(act(s, 0, { t: "build", cell: 39, branch: "income" }).ok).toBe(true);
+  });
+});

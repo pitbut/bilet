@@ -45,7 +45,13 @@ export interface Player extends PlayerConfig {
   bj: Blackjack | null;
   /** Ставка тотализатора на сумму следующего броска. */
   tote: { choice: ToteChoice; amount: number } | null;
+  /** Кредиты банка под залог компании или акций. */
+  loans: Loan[];
 }
+
+/** Кредит: залог — своя компания (company) или свои акции чужой компании (shares). */
+export interface Loan { id: number; kind: "company" | "shares"; cell: number; amount: number; due: number }
+export interface CoopPart { pid: number; lots: number }
 
 export type ToteChoice = "low" | "seven" | "high";
 export interface Blackjack { bet: number; player: number[]; dealer: number[]; lounge: boolean }
@@ -132,6 +138,7 @@ export interface GameState {
   turnCounter: number;
   offers: Offer[];
   nextOfferId: number;
+  nextLoanId: number;
   /** Только для тестов: заранее заданные броски. */
   forcedDice?: [number, number][];
 }
@@ -162,6 +169,10 @@ export type Action =
   | { t: "buyShares"; cell: number; lots: number }
   | { t: "offerShares"; cell: number; lots: number; to: number; price: number }
   | { t: "bidShares"; cell: number; lots: number; price: number }
+  | { t: "buyCoop"; partners: CoopPart[] }
+  | { t: "takeLoan"; cell: number; kind: "company" | "shares"; amount: number }
+  | { t: "repayLoan"; id: number }
+  | { t: "demolish"; cell: number }
   | { t: "bidCompany"; cell: number; price: number }
   | { t: "acceptOffer"; id: number }
   | { t: "declineOffer"; id: number }
@@ -223,10 +234,10 @@ export function newGame(cfg: GameConfig): GameState {
     cfg,
     players: cfg.players.map((p, id) => ({
       ...p, id, money: cfg.startMoney ?? START_MONEY, pos: 0, bankrupt: false, inCasino: false,
-      skipNext: false, energy: ENERGY_PER_ROUND, doubles: 0, casinoWinnings: 0, loungeBets: 0, trades: 0, bj: null, tote: null,
+      skipNext: false, energy: ENERGY_PER_ROUND, doubles: 0, casinoWinnings: 0, loungeBets: 0, trades: 0, bj: null, tote: null, loans: [],
     })),
     props, current: 0, round: 1, phase: "roll", pending: null, casinoBets: 0, lastDice: [1, 1],
-    jackpot: 0, market: null, offers: [], nextOfferId: 1, rng: cfg.seed ?? Math.floor(Math.random() * 2 ** 31), events: [], winner: null, turnCounter: 0,
+    jackpot: 0, market: null, offers: [], nextOfferId: 1, nextLoanId: 1, rng: cfg.seed ?? Math.floor(Math.random() * 2 ** 31), events: [], winner: null, turnCounter: 0,
   };
   if (cfg.length === "quick") { // ускоритель быстрой партии: по случайной клетке каждому
     const free = BOARD.filter((c) => c.kind === "business").map((c) => c.index);
@@ -326,6 +337,7 @@ export function capital(s: GameState, pid: number): number {
     if (p.owner === pid) v += companyValue(s, +i) * ownerLots(p) / 10;
     else if (p.holders[pid]) v += p.holders[pid] * lotPrice(s, +i);
   }
+  v -= pl.loans.reduce((a, l) => a + l.amount, 0);
   return Math.round(v);
 }
 
@@ -357,6 +369,7 @@ export function freeLots(s: GameState, pid: number, idx: number): number {
   const p = s.props[idx];
   if (!p || p.owner === null) return 0;
   if (p.owner === pid) return Math.max(0, ownerLots(p) - OWNER_MIN_LOTS - listedBy(p, pid));
+  if (s.players[pid].loans.some((l) => l.kind === "shares" && l.cell === idx)) return 0; // акции в залоге
   return Math.max(0, (p.holders[pid] ?? 0) - listedBy(p, pid));
 }
 
@@ -428,6 +441,7 @@ function executeOffer(s: GameState, o: Offer): boolean {
   const name = cell(o.cell).name;
   if (o.whole) {
     if (p.owner !== seller || s.players[buyer].money < o.price) return false;
+    if (s.players[seller].loans.some((l) => l.kind === "company" && l.cell === o.cell)) return false; // компания в залоге у банка
     give(s, buyer, -o.price, `выкуп «${name}»`);
     give(s, seller, o.price, `продажа «${name}»`);
     transferCompany(s, o.cell, buyer);
@@ -456,6 +470,59 @@ export function botAsk(s: GameState, owner: number, idx: number, whole: boolean,
   if (c.industry && hasMonopoly(s, owner, c.industry)) ask *= 2.2; // свою монополию просто так не отдаст
   if (c.industry && industryCells(c.industry).filter((i) => i !== idx).every((i) => owns(s, buyer, i))) ask *= 1.6; // покупателю она нужна для монополии
   return Math.round(ask * greed * poor);
+}
+
+// ---------- Банк: кредиты под залог ----------
+
+export const LOAN_SHARE = 0.6; // кредит — до 60% стоимости залога
+export const LOAN_RATE = 0.05; // проценты за каждый свой ход
+export const LOAN_ROUNDS = 5; // срок, потом банк забирает залог
+
+/** Сколько банк даст под залог (0 — нельзя). */
+export function loanLimit(s: GameState, pid: number, idx: number, kind: "company" | "shares"): number {
+  const p = s.props[idx], pl = s.players[pid];
+  if (!p || p.owner === null) return 0;
+  if (pl.loans.some((l) => l.cell === idx && l.kind === kind)) return 0;
+  if (kind === "company") {
+    if (p.owner !== pid || p.mortgaged) return 0;
+    return Math.floor(companyValue(s, idx) * ownerLots(p) / LOTS * LOAN_SHARE);
+  }
+  const lots = (p.holders[pid] ?? 0) - listedBy(p, pid);
+  return lots > 0 ? Math.floor(lots * lotPrice(s, idx) * LOAN_SHARE) : 0;
+}
+
+/** Проценты и просрочка: вызывается в начале хода игрока. */
+function serviceLoans(s: GameState, pid: number) {
+  const pl = s.players[pid];
+  for (const l of [...pl.loans]) {
+    if (pl.bankrupt) return;
+    const name = cell(l.cell).name;
+    if (s.round > l.due) { // срок вышел — банк забирает залог, долг списан
+      pl.loans = pl.loans.filter((x) => x !== l);
+      const p = s.props[l.cell];
+      if (l.kind === "company" && p.owner === pid) {
+        transferCompany(s, l.cell, null);
+        Object.assign(p, { level: 0, branch: null, mortgaged: false, invested: 0, fastBonus: false, construction: null });
+        emit(s, { type: "buy", player: pid, cell: l.cell });
+      } else if (l.kind === "shares" && p.holders[pid]) {
+        delete p.holders[pid];
+        p.listings = p.listings.filter((x) => x.seller !== pid);
+      }
+      stockEvent(s, `Банк забирает залог у ${pl.name}: ${l.kind === "company" ? `«${name}»` : `акции «${name}»`} — кредит не погашен`, [pid]);
+      continue;
+    }
+    charge(s, pid, Math.max(1, Math.ceil(l.amount * LOAN_RATE)), null, `проценты по кредиту «${name}»`);
+  }
+}
+
+// ---------- Складчина ----------
+
+/** Согласится ли бот войти в долю при покупке клетки. */
+export function coopAnswer(s: GameState, pid: number, idx: number, lots: number): boolean {
+  const pl = s.players[pid];
+  const share = Math.ceil((cell(idx).price ?? 0) * lots / LOTS);
+  const reserve = { shark: 150, miser: 450, gambler: 150, trader: 250 }[pl.personality ?? "trader"];
+  return !pl.bankrupt && pl.money - share >= reserve;
 }
 
 export function canBuild(s: GameState, pid: number, idx: number): { ok: boolean; reason?: string; cost?: number; level?: number } {
@@ -558,6 +625,7 @@ function bankrupt(s: GameState, pid: number, creditor: number | null) {
   pl.money = 0;
   pl.bankrupt = true;
   s.offers = s.offers.filter((o) => o.from !== pid && o.to !== pid);
+  pl.loans = [];
   for (const [i, p] of Object.entries(s.props)) {
     p.listings = p.listings.filter((l) => l.seller !== pid);
     const held = p.holders[pid];
@@ -593,6 +661,8 @@ function startTurn(s: GameState) {
   s.pending = null;
   s.casinoBets = 0;
   emit(s, { type: "turn", player: pl.id, round: s.round });
+  serviceLoans(s, pl.id);
+  if (pl.bankrupt) return;
   pl.loungeBets = 0;
   pl.trades = 0;
   // Доход веток «Доход», экспорта зерна и СПГ — с дивидендами акционерам.
@@ -1131,6 +1201,60 @@ export function act(s: GameState, pid: number, a: Action): Result {
       log(s, `${pl.name} выкупает «${cell(a.cell).name}» у ${s.players[prev].name} за ${chk.cost} — монополия!`);
       return { ok: true };
     }
+    case "buyCoop": {
+      if (s.pending?.kind !== "buy") return { ok: false, error: "Складчина — при покупке свободной клетки" };
+      const idx = s.pending.cell, c = cell(idx), price = c.price!;
+      const parts = a.partners.filter((x) => x.lots > 0);
+      const total = parts.reduce((t, x) => t + x.lots, 0);
+      if (!parts.length) return { ok: false, error: "Выберите хотя бы одного партнёра" };
+      if (total > LOTS - OWNER_MIN_LOTS) return { ok: false, error: "Партнёрам — не больше 40%" };
+      if (new Set(parts.map((x) => x.pid)).size !== parts.length || parts.some((x) => x.pid === pid || !s.players[x.pid] || s.players[x.pid].bankrupt)) return { ok: false, error: "Неверный список партнёров" };
+      const shareOf = (x: CoopPart) => Math.ceil(price * x.lots / LOTS);
+      const poor = parts.find((x) => s.players[x.pid].money < shareOf(x));
+      if (poor) return { ok: false, error: `${s.players[poor.pid].name}: не хватает денег на свою долю` };
+      const declined = parts.filter((x) => s.players[x.pid].bot && !coopAnswer(s, x.pid, idx, x.lots));
+      if (declined.length) return { ok: false, error: `Отказ: ${declined.map((x) => s.players[x.pid].name).join(", ")}`, info: "declined" };
+      const mine = price - parts.reduce((t, x) => t + shareOf(x), 0);
+      if (pl.money < mine) return { ok: false, error: `Ваша часть ${mine} — не хватает денег` };
+      give(s, pid, -mine, `покупка «${c.name}» в складчину`);
+      const p = s.props[idx];
+      p.owner = pid;
+      for (const x of parts) { give(s, x.pid, -shareOf(x), `доля в «${c.name}»`); p.holders[x.pid] = x.lots; }
+      emit(s, { type: "buy", player: pid, cell: idx });
+      stockEvent(s, `${pl.name} покупает «${c.name}» в складчину: ${parts.map((x) => `${s.players[x.pid].name} ${x.lots * 10}%`).join(", ")}`, [pid, ...parts.map((x) => x.pid)]);
+      afterLanding(s, pid);
+      return { ok: true };
+    }
+    case "takeLoan": case "repayLoan": case "demolish": {
+      if (s.phase !== "roll" && s.phase !== "end") return { ok: false, error: "Банк — до броска или в конце хода" };
+      if (a.t === "repayLoan") {
+        const l = pl.loans.find((x) => x.id === a.id);
+        if (!l) return { ok: false, error: "Кредита нет" };
+        if (pl.money < l.amount) return { ok: false, error: `Нужно ${l.amount}` };
+        give(s, pid, -l.amount, `погашение кредита «${cell(l.cell).name}»`);
+        pl.loans = pl.loans.filter((x) => x !== l);
+        stockEvent(s, `${pl.name} гасит кредит под «${cell(l.cell).name}»`, [pid]);
+        return { ok: true };
+      }
+      if (a.t === "demolish") {
+        const p = s.props[a.cell];
+        if (!p || p.owner !== pid || p.level === 0 || p.construction) return { ok: false, error: "Сносить нечего" };
+        const refund = Math.round(p.invested / 2);
+        give(s, pid, refund, `снос построек «${cell(a.cell).name}»`);
+        Object.assign(p, { level: 0, branch: null, invested: 0, fastBonus: false });
+        log(s, `${pl.name} сносит постройки в «${cell(a.cell).name}» (+${refund}) — можно выбрать другую ветку`);
+        return { ok: true };
+      }
+      const lim = loanLimit(s, pid, a.cell, a.kind);
+      const amount = Math.round(a.amount);
+      if (!lim) return { ok: false, error: "Под это банк не даёт" };
+      if (amount < 10 || amount > lim) return { ok: false, error: `Кредит от 10 до ${lim}` };
+      const l: Loan = { id: s.nextLoanId++, kind: a.kind, cell: a.cell, amount, due: s.round + LOAN_ROUNDS };
+      pl.loans.push(l);
+      give(s, pid, amount, `кредит под «${cell(a.cell).name}»`);
+      stockEvent(s, `${pl.name} берёт в банке ${amount} под залог ${a.kind === "company" ? `«${cell(a.cell).name}»` : `акций «${cell(a.cell).name}»`} до ${l.due}-го раунда`, [pid]);
+      return { ok: true };
+    }
     case "bidShares": case "bidCompany": {
       if (s.phase !== "roll" && s.phase !== "end") return { ok: false, error: "Предложения — до броска или в конце хода" };
       const p = s.props[a.cell];
@@ -1214,6 +1338,7 @@ export function act(s: GameState, pid: number, a: Action): Result {
       const p = s.props[a.cell];
       if (!p || p.owner !== pid || p.mortgaged) return { ok: false, error: "Нельзя заложить" };
       if (p.level > 0 || p.construction) return { ok: false, error: "Сначала снесите постройки" };
+      if (pl.loans.some((l) => l.kind === "company" && l.cell === a.cell)) return { ok: false, error: "Компания уже в залоге по кредиту" };
       mortgage(s, pid, a.cell);
       return { ok: true };
     }

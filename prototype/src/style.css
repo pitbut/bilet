@@ -225,3 +225,7 @@ label { display: flex; align-items: center; gap: 6px; font-size: 14px; }
 .deal-reply.good { background: #e8f5e9; border-color: #a5d6a7; color: var(--good); }
 .price.wide { width: 120px; }
 .perks { font-size: 13px; background: #f1f8e9; border: 1px solid #c5e1a5; border-radius: 10px; padding: 8px 10px; line-height: 1.4; }
+
+.branchlock { display: flex; gap: 8px; align-items: center; justify-content: space-between; font-size: 12px; color: var(--muted); background: #f6f4ef; border-radius: 10px; padding: 6px 8px; }
+.branchlock button { flex: none; }
+.ccard .small.ghost + .small.ghost { margin-top: 4px; }

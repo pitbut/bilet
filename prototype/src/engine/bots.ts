@@ -1,6 +1,6 @@
 // Боты с характерами: Акула, Скряга, Игроман, Торгаш.
 import { BOARD, BranchId, industryCells } from "./board";
-import { Action, GameState, Personality, canBuild, canTakeover, companyValue, freeLots, hasMonopoly, lotPrice, ownedCount, randInt, rentFor } from "./engine";
+import { Action, GameState, Personality, canBuild, canTakeover, companyValue, freeLots, hasMonopoly, loanLimit, lotPrice, ownedCount, randInt, rentFor } from "./engine";
 
 const RESERVE: Record<Personality, number> = { shark: 100, miser: 400, gambler: 150, trader: 250 };
 const BRANCH: Record<Personality, BranchId> = { shark: "rent", miser: "income", gambler: "special", trader: "rent" };
@@ -82,6 +82,14 @@ function pickBuild(s: GameState, reserve: number, branch: BranchId): Action | nu
 /** Биржа для бота: при нехватке денег продаёт долю (или предлагает её человеку), при избытке — покупает доходные акции. */
 function stockMove(s: GameState, reserve: number): Action | null {
   const pl = s.players[s.current];
+  // банк: погасить кредит, когда деньги есть; взять, когда совсем туго
+  const loan = pl.loans.find((l) => pl.money - l.amount > reserve * 2);
+  if (loan) return { t: "repayLoan", id: loan.id };
+  if (pl.money < reserve * 0.6 && !pl.loans.length) {
+    const col = Object.keys(s.props).map(Number).filter((i) => s.props[i].owner === pl.id && loanLimit(s, pl.id, i, "company") >= 50)
+      .sort((a, b) => loanLimit(s, pl.id, b, "company") - loanLimit(s, pl.id, a, "company"))[0];
+    if (col !== undefined) return { t: "takeLoan", cell: col, kind: "company", amount: Math.floor(loanLimit(s, pl.id, col, "company") * 0.8) };
+  }
   if (pl.trades >= 2) return null;
   const owned = Object.keys(s.props).map(Number).filter((i) => s.props[i].owner === pl.id && freeLots(s, pl.id, i) > 0);
   if (pl.money < reserve * 0.8 && owned.length) {
