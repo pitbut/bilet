@@ -1,0 +1,6 @@
+{
+  "appId": "ru.oligarh.game",
+  "appName": "Олигарх",
+  "webDir": "dist",
+  "android": { "backgroundColor": "#1d2a33" }
+}
