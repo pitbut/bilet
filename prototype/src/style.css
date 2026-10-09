@@ -240,3 +240,4 @@ button.ghostlight { background: rgba(255, 255, 255, 0.08); color: #f3efe6; borde
 .tables { width: min(560px, 100%); display: flex; flex-direction: column; gap: 8px; min-height: 60px; }
 button.tablebtn { background: #e8c15a; color: #222; border-color: #e8c15a; font-weight: 700; }
 .setup .small { font-size: 13px; }
+.lux-line { color: #b8860b; font-weight: 600; margin-top: 2px; }

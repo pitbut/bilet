@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { BOARD, INDUSTRIES } from "../engine/board";
-import { GameState } from "../engine/engine";
+import { GameState, fame } from "../engine/engine";
 import { sfx } from "./sound";
 
 const S = 2.2; // шаг клетки
@@ -275,12 +275,13 @@ export class BoardScene {
     const jobs: Promise<void>[] = [];
     for (let i = 0; i < 40; i++) {
       const p = s.props[i];
-      const sig = p ? `${p.owner}|${p.level}|${p.branch}|${p.mortgaged}|${p.construction ? Math.floor(p.construction.progress / 5) : "-"}` : "static";
+      const sig = p ? `${p.owner}|${p.level}|${p.branch}|${p.mortgaged}|${p.construction ? Math.floor(p.construction.progress / 5) : "-"}|${p.ad?.kind ?? ""}` : "static";
       if (sig === this.cellSig[i]) continue;
       this.cellSig[i] = sig;
       jobs.push(this.rebuildCell(s, i));
     }
     this.drawCenter(s);
+    for (const pl of s.players) jobs.push(this.syncEstate(s, pl.id));
     await Promise.all(jobs);
   }
 
@@ -325,6 +326,13 @@ export class BoardScene {
       }
     }
     if (p?.construction) content.add(this.progressBar(p.construction.progress, p.construction.target));
+    if (p?.ad) { // рекламный щит у клетки
+      const bb = await loadModel("lux/billboard");
+      bb.scale.setScalar(p.ad.kind === "tv" ? 0.62 : 0.5);
+      bb.position.set(-0.62, 0.08, -0.62);
+      bb.rotation.y = -cellPos(i).ry + 0.35; // лицом к игроку
+      content.add(bb);
+    }
     if (old) g.remove(old);
     g.add(content);
   }
@@ -387,6 +395,74 @@ export class BoardScene {
     mat.map?.dispose();
     mat.map = tex;
     mat.needsUpdate = true;
+  }
+
+  // ---------- Усадьбы игроков в центре поля: роскошь видна всем ----------
+
+  private estates: THREE.Group[] = [];
+  private estateSig: string[] = [];
+
+  /** Центр участка игрока (до 6 участков вокруг надписи). */
+  estatePos(pid: number) {
+    const spots = [[-7.2, 6.9], [7.2, 6.9], [7.2, -7.4], [-7.2, -7.4], [0, 6.9], [0, -7.4]];
+    const [x, z] = spots[pid % spots.length];
+    return new THREE.Vector3(x, 0, z);
+  }
+
+  private async syncEstate(s: GameState, pid: number) {
+    const pl = s.players[pid];
+    const sig = pl.bankrupt ? "x" : `${pl.lux.map((l) => l.kind).sort().join(",")}|${pl.buffs.map((b) => b.kind).sort().join(",")}|${fame(s, pid)}`;
+    if (this.estateSig[pid] === sig) return;
+    this.estateSig[pid] = sig;
+    const g = new THREE.Group();
+    g.position.copy(this.estatePos(pid));
+    const W = 3.6;
+    const ground = new THREE.Mesh(new THREE.BoxGeometry(W, 0.06, W), new THREE.MeshStandardMaterial({ color: pl.bankrupt ? "#9e9e9e" : "#8fbf6a", roughness: 0.95 }));
+    ground.position.y = 0.03;
+    ground.receiveShadow = true;
+    g.add(ground);
+    const edge = new THREE.Mesh(new THREE.RingGeometry(W / 2 * Math.SQRT2 - 0.1, W / 2 * Math.SQRT2, 4, 1), new THREE.MeshBasicMaterial({ color: pl.color }));
+    edge.rotation.set(-Math.PI / 2, 0, Math.PI / 4);
+    edge.position.y = 0.065;
+    g.add(edge);
+    // табличка с именем и статусом
+    const f = fame(s, pid);
+    const tag = new THREE.Mesh(new THREE.PlaneGeometry(W, 0.55), new THREE.MeshBasicMaterial({ transparent: true, map: canvasTexture(512, 82, (x) => {
+      x.fillStyle = pl.color; x.globalAlpha = 0.9; x.fillRect(0, 0, 512, 82); x.globalAlpha = 1;
+      x.fillStyle = "#fff"; x.font = "700 40px system-ui"; x.textAlign = "center"; x.textBaseline = "middle";
+      x.fillText(`${pl.name}${f ? `  ★${f}` : ""}`, 256, 43);
+    }) }));
+    tag.rotation.x = -Math.PI / 2;
+    tag.position.set(0, 0.07, W / 2 + 0.32);
+    g.add(tag);
+    if (!pl.bankrupt) {
+      const put = async (id: string, x: number, z: number, k: number, ry = 0) => {
+        const m = await loadModel(id);
+        m.scale.setScalar(k);
+        m.position.set(x, 0.06, z);
+        m.rotation.y = ry;
+        g.add(m);
+      };
+      const jobs: Promise<void>[] = [];
+      const has = (k: string) => pl.lux.some((l) => l.kind === k);
+      if (has("mansion")) jobs.push(put("lux/mansion", -0.85, -0.85, 0.95));
+      if (has("yacht")) jobs.push(put("lux/yacht", 0.9, -0.85, 0.92));
+      if (has("car")) jobs.push(put("lux/car", -0.8, 0.7, 0.9, 0.6));
+      pl.lux.filter((l) => l.kind === "painting").forEach((_, k) => jobs.push(put("lux/painting", -1.4 + k * 0.42, 1.35, 0.5, 0.2)));
+      pl.buffs.forEach((b, k) => jobs.push(put(`lux/${b.kind}`, 0.85 + (k - (pl.buffs.length - 1) / 2) * 0.5, 0.85, pl.buffs.length > 1 ? 0.5 : 0.8)));
+      await Promise.all(jobs);
+    }
+    g.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh && m !== tag && m !== edge) { m.castShadow = true; m.receiveShadow = true; } });
+    if (this.estateSig[pid] !== sig) return; // пока грузилось, состояние уже сменилось
+    if (this.estates[pid]) this.scene.remove(this.estates[pid]);
+    this.estates[pid] = g;
+    this.scene.add(g);
+  }
+
+  /** Крупный план усадьбы — показать покупку. */
+  async showEstate(pid: number, hold = 2.0) {
+    const p = this.estatePos(pid);
+    await this.closeUpAt(new THREE.Vector3(p.x, 0.4, p.z), new THREE.Vector3(0.3, 0, 1), hold, 6);
   }
 
   // ---------- Фишки ----------
@@ -549,12 +625,18 @@ export class BoardScene {
   /** Ход фишки «с кинематографом»: пауза → вид сверху с меткой → наезд 30° и проводка → отъезд на обзор. */
   /** Крупный план клетки: показать прокачку (стройку или готовое здание), потом вернуться к обзору. */
   async closeUp(cellI: number, hold = 1.8) {
+    const p = cellPos(cellI);
+    await this.closeUpAt(new THREE.Vector3(p.x, 0.5, p.z), new THREE.Vector3(p.x, 0, p.z), hold, 4.6);
+  }
+
+  /** Крупный план точки target, камера отходит в сторону out. */
+  async closeUpAt(target: THREE.Vector3, outDir: THREE.Vector3, hold: number, dist: number) {
     if (this.hopTime === 0 || !this.home) return;
     const f = this.hopTime / 0.42;
-    const p = cellPos(cellI);
-    const target = new THREE.Vector3(p.x, 0.5, p.z);
-    const out = new THREE.Vector3(p.x, 0, p.z).normalize();
-    const d = this.camera.aspect < 1 ? 8 : 4.6;
+    const out = outDir.clone().setY(0);
+    if (out.lengthSq() < 0.01) out.set(0, 0, 1);
+    out.normalize();
+    const d = this.camera.aspect < 1 ? dist * 1.75 : dist;
     const pos = target.clone().addScaledVector(out, d * Math.cos(0.75)).add(new THREE.Vector3(0, d * Math.sin(0.75), 0));
     this.controls.enabled = false;
     try {

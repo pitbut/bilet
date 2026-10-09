@@ -744,6 +744,135 @@ def dice(m):
             m.sphere(RED if num == 1 else BLACK, p[0], p[1] + h, p[2], 0.04, 8)
 
 
+# ---------- Роскошь (без основания, стоят на участке игрока) ----------
+
+def lux_mansion(m):
+    m.box(GRASS, 0, 0, 0, 1.9, 0.03, 1.9)
+    # главный корпус и два крыла
+    m.box(CREAM, 0, 0.03, -0.3, 0.9, 0.45, 0.55)
+    m.roof(ROOF, 0, 0.48, -0.3, 0.96, 0.22, 0.6)
+    for sx in (-0.65, 0.65):
+        m.box(CREAM, sx, 0.03, -0.35, 0.45, 0.32, 0.45)
+        m.roof(ROOF, sx, 0.35, -0.35, 0.5, 0.16, 0.5)
+        for k in (-0.1, 0.1):
+            m.box(GLASS_DARK, sx + k, 0.15, -0.12, 0.08, 0.12, 0.012)
+    # портик с колоннами
+    m.box(WHITE, 0, 0.03, 0.02, 0.6, 0.04, 0.14)
+    for x in (-0.24, -0.08, 0.08, 0.24):
+        m.cyl(WHITE, x, 0.07, 0.06, 0.025, 0.36, 8)
+    m.roof(WHITE, 0, 0.43, 0.05, 0.62, 0.12, 0.16)
+    m.box(WOOD, 0, 0.03, -0.02, 0.12, 0.2, 0.012)
+    for k in range(2):
+        for x in (-0.3, 0.3):
+            m.box(GLASS_DARK, x, 0.12 + k * 0.18, -0.02, 0.09, 0.1, 0.012)
+    # бассейн, дорожка, ёлки
+    m.box(WHITE, 0.45, 0.03, 0.55, 0.62, 0.025, 0.42)
+    m.box(POOL, 0.45, 0.04, 0.55, 0.54, 0.02, 0.34, glow=False)
+    m.box(SAND, -0.25, 0.03, 0.55, 0.12, 0.01, 0.75)
+    for x, z in ((-0.8, 0.75), (-0.8, 0.35), (0.85, -0.85), (-0.85, -0.85)):
+        tree(m, x, z, 1.3, y=0.03)
+    for x in (-0.9, 0.9):
+        m.box(WHITE, x, 0.03, 0.0, 0.04, 0.12, 1.8)
+    m.box(GOLD, -0.25, 0.03, 0.93, 0.3, 0.16, 0.03, metal=0.8)
+
+
+def lux_car(m):
+    s = 3.2
+    m.box(RED, 0, 0.03 * s, 0, 0.27 * s, 0.04 * s, 0.12 * s, metal=0.4)
+    m.box(RED, 0.02 * s, 0.07 * s, 0, 0.1 * s, 0.03 * s, 0.1 * s, metal=0.4)
+    m.box(GLASS_DARK, 0.02 * s, 0.07 * s, 0, 0.11 * s, 0.028 * s, 0.104 * s, rot=[("z", 0.25)])
+    m.box(BLACK, -0.125 * s, 0.075 * s, 0, 0.02 * s, 0.01 * s, 0.13 * s)
+    for z in (-0.04, 0.04):
+        m.box(BLACK, -0.12 * s, 0.07 * s, z * s, 0.01 * s, 0.01 * s, 0.01 * s)
+    for dx in (-0.085, 0.085):
+        for dz in (-0.06, 0.06):
+            m.hcyl(BLACK, dx * s, 0.028 * s, dz * s, 0.028 * s, 0.025 * s, pi / 2, 10)
+            m.hcyl(SILVER, dx * s, 0.028 * s, (dz * 1.22) * s, 0.016 * s, 0.004 * s, pi / 2, 8, metal=0.9)
+    for z in (-0.04, 0.04):
+        m.box(YELLOW, 0.136 * s, 0.05 * s, z * s, 0.004 * s, 0.012 * s, 0.025 * s, glow=True)
+
+
+def lux_yacht(m):
+    m.box(WATER, 0, 0, 0, 1.95, 0.02, 1.0)
+    hull_l = 1.5
+    m.box(WHITE, -0.05, 0.02, 0, hull_l, 0.16, 0.38)
+    m.box(WHITE, hull_l / 2 - 0.05, 0.02, 0, 0.27, 0.16, 0.27, ry=pi / 4)
+    m.box(BLUE, 0.05, 0.02, 0, hull_l + 0.2, 0.04, 0.39)
+    m.box(WOOD, -0.05, 0.18, 0, hull_l - 0.1, 0.01, 0.34)
+    m.box(WHITE, -0.15, 0.19, 0, 0.8, 0.14, 0.3)
+    m.box(GLASS_DARK, -0.15, 0.23, 0, 0.82, 0.06, 0.305)
+    m.box(WHITE, -0.25, 0.33, 0, 0.5, 0.12, 0.26)
+    m.box(GLASS_DARK, -0.15, 0.36, 0, 0.32, 0.05, 0.265)
+    m.box(WHITE, -0.3, 0.45, 0, 0.22, 0.05, 0.2)
+    m.cyl(SILVER, -0.3, 0.5, 0, 0.012, 0.25, 6, metal=0.8)
+    m.box(RED, -0.27, 0.68, 0, 0.06, 0.04, 0.005)
+    m.box(POOL, -0.65, 0.185, 0, 0.18, 0.012, 0.2)
+    m.box(DARK_STEEL, 0.32, 0.36, 0, 0.12, 0.02, 0.12)
+    m.cyl(SILVER, 0.32, 0.38, 0, 0.1, 0.005, 12)
+
+
+def lux_painting(m):
+    # мольберт с картиной в золотой раме
+    for x in (-0.25, 0.25):
+        m.box(WOOD, x, 0, 0, 0.04, 1.05, 0.04, rot=[("z", -0.12 if x > 0 else 0.12)])
+    m.box(WOOD, 0, 0, -0.25, 0.04, 1.0, 0.04, rot=[("x", -0.3)])
+    m.box(WOOD, 0, 0.3, 0.02, 0.6, 0.04, 0.08)
+    m.box(GOLD, 0, 0.34, 0.03, 0.66, 0.6, 0.04, metal=0.8)
+    m.box(CREAM, 0, 0.38, 0.055, 0.56, 0.52, 0.01)
+    m.box(BLUE, 0, 0.62, 0.062, 0.56, 0.28, 0.005)
+    m.box(YELLOW, 0.13, 0.75, 0.066, 0.1, 0.1, 0.005, glow=True)
+    m.box(DARK_GRASS, 0, 0.38, 0.064, 0.56, 0.18, 0.005)
+    m.box(ROOF, -0.12, 0.5, 0.066, 0.18, 0.14, 0.005)
+    m.box(RED, -0.12, 0.62, 0.068, 0.2, 0.04, 0.005)
+
+
+def lux_party(m):
+    m.box(DARK_GRASS, 0, 0, 0, 1.6, 0.02, 1.6)
+    m.box(WHITE, 0, 0.02, 0, 1.0, 0.3, 0.8)
+    m.roof(WHITE, 0, 0.32, 0, 1.06, 0.3, 0.86)
+    m.box(GOLD, 0, 0.32, 0.43, 1.06, 0.03, 0.01, glow=True)
+    for k, c in enumerate((RED, YELLOW, BLUE, PINK, NEON)):
+        x = -0.6 + k * 0.3
+        m.cyl(SILVER, x, 0.02, 0.65, 0.004, 0.55, 4)
+        m.sphere(c, x, 0.62, 0.65, 0.07, 10)
+    for x in (-0.25, 0.25):
+        m.cyl(WHITE, x, 0.02, 0.6, 0.08, 0.12, 10)
+        m.cyl(GOLD, x, 0.14, 0.6, 0.02, 0.06, 6, metal=0.8)
+    for k in range(10):
+        a = 2 * pi * k / 10
+        m.sphere(YELLOW if k % 2 else NEON, 0.55 * cos(a), 0.95 + 0.08 * sin(3 * a), 0.55 * sin(a), 0.03, 6, glow=True)
+
+
+def lux_vacation(m):
+    m.box(WATER, 0, 0, 0, 1.9, 0.02, 1.9)
+    m.cyl(SAND, 0, 0.0, 0, 0.75, 0.06, 16)
+    palm(m, -0.25, -0.2, 2.2)
+    palm(m, 0.3, -0.35, 1.7)
+    for x in (-0.1, 0.25):
+        m.box(WHITE, x, 0.06, 0.3, 0.14, 0.03, 0.34, rot=[("x", 0.0)])
+        m.box(WHITE, x, 0.08, 0.17, 0.14, 0.12, 0.03, rot=[("x", -0.5)])
+    m.cyl(SILVER, 0.08, 0.06, 0.15, 0.01, 0.35, 4)
+    m.cyl(RED, 0.08, 0.38, 0.15, 0.25, 0.08, 10, rt=0.01)
+
+
+def lux_gifts(m):
+    for x, z, s, c, rib in ((-0.2, 0.0, 0.45, RED, GOLD), (0.28, 0.1, 0.32, BLUE, WHITE), (0.05, -0.32, 0.26, PINK, GOLD), (0.05, 0.0, 0.22, PURPLE, GOLD)):
+        y = 0.45 if c == PURPLE else 0
+        m.box(c, x, y, z, s, s, s)
+        m.box(rib, x, y, z, s + 0.01, s + 0.01, 0.05)
+        m.box(rib, x, y, z, 0.05, s + 0.01, s + 0.01)
+        m.sphere(rib, x, y + s + 0.03, z, 0.05, 8)
+
+
+def lux_billboard(m):
+    for x in (-0.3, 0.3):
+        m.box(DARK_STEEL, x, 0, 0, 0.05, 0.75, 0.05, metal=0.5)
+    m.box(DARK_STEEL, 0, 0.7, -0.02, 1.0, 0.5, 0.04, metal=0.5)
+    m.box(YELLOW, 0, 0.72, 0.0, 0.95, 0.46, 0.012, glow=True)
+    m.box(RED, 0, 0.88, 0.008, 0.8, 0.1, 0.01)
+    m.box(BLACK, 0, 0.76, 0.008, 0.6, 0.06, 0.01)
+
+
 INDUSTRIES = [
     ("agro", "Агро", ("Ферма → Агрохолдинг", "Элеватор", "Экспорт зерна"), (agro_rent, agro_income, agro_special)),
     ("forest", "Лес и бумага", ("Лесопилка → ЦБК", "Мебельная фабрика", "Стройматериалы"),
@@ -777,4 +906,12 @@ OTHERS = [
     ("tokens", "derrick", "Нефтяная вышка", token_derrick),
     ("tokens", "goldbar", "Золотой слиток", token_goldbar),
     ("props", "dice", "Кубик", dice),
+    ("lux", "mansion", "Особняк", lux_mansion),
+    ("lux", "car", "Спорткар", lux_car),
+    ("lux", "yacht", "Яхта", lux_yacht),
+    ("lux", "painting", "Картина", lux_painting),
+    ("lux", "party", "Вечеринка", lux_party),
+    ("lux", "vacation", "Отдых", lux_vacation),
+    ("lux", "gifts", "Подарки", lux_gifts),
+    ("lux", "billboard", "Рекламный щит", lux_billboard),
 ]

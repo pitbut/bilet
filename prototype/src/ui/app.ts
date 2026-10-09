@@ -4,7 +4,9 @@ import { isMuted, setMuted, sfx } from "./sound";
 import { BOARD, BRANCH_EFFECTS, BranchId, INDUSTRIES } from "../engine/board";
 import {
   Action, GameConfig, GameEvent, GameState, Result, act, active, buildCost, canBuild, canLounge, canTakeover, capital, companyValue, drainEvents, freeLots,
-  INCOME_SHARE, LOAN_RATE, PUBLIC_PROTECT_LOTS, coopAnswer, loanLimit, WORKOFF_DISCOUNT, lotPrice, newGame, ownerLots, rentFor, soldLots,
+  INCOME_SHARE, PUBLIC_PROTECT_LOTS, coopAnswer, loanLimit, WORKOFF_DISCOUNT, lotPrice, newGame, ownerLots, rentFor, soldLots,
+  AD, AdKind, DEPOSIT_RATE, EXPERIENCES, ExpKind, FAME_RENT, LUX, LuxKind, LUX_TAX, EXP_TAX, STASH_MAX, adCost, expCost, fame, luxCost, luxPayback,
+  loanRate, loanShare, luxuryTaxCell,
 } from "../engine/engine";
 import { botStep } from "../engine/runner";
 import { BoardScene } from "./scene";
@@ -329,6 +331,23 @@ export class App {
           if (human && this.speed !== "instant" && !this.modalView) await this.scene.closeUp(e.cell, 2.2);
           break;
         }
+        case "lux": {
+          sfx.buy();
+          const mine = this.isLocal(e.player) && !s.players[e.player].bot;
+          this.toast(e.text, mine ? "good" : "", 3200);
+          if (mine && this.modalView === "life") this.closeModal();
+          await this.scene.sync(s);
+          if (this.speed !== "instant" && !this.modalView) await this.scene.showEstate(e.player, mine ? 2.4 : 1.2);
+          break;
+        }
+        case "ad": {
+          const mine = this.isLocal(e.player) && !s.players[e.player].bot;
+          this.toast(`${s.players[e.player].name}: «${AD[e.kind].name}» для «${BOARD[e.cell].name}»`, mine ? "good" : "");
+          if (mine && this.modalView === "life") this.closeModal();
+          await this.scene.sync(s);
+          if (mine && this.speed !== "instant" && !this.modalView) await this.scene.closeUp(e.cell, 1.4);
+          break;
+        }
         case "accident":
           sfx.alert();
           this.toast(`Авария на стройке «${BOARD[e.cell].name}»!`, "warn");
@@ -397,7 +416,8 @@ export class App {
     const exch = button(`📈 Биржа и банк${offers ? ` · ${offers}` : ""}`, () => this.showExchange(), `small chipbtn${offers ? " hotbtn" : ""}`);
     const lounge = s.cfg.mode !== "hotseat" && s.current !== me.id && !me.bankrupt && s.phase !== "gameover"
       ? button("🎰 Казино", () => this.openCasino(true), `small chipbtn${canLounge(s, me.id) ? " dim" : ""} casbtn`) : "";
-    this.bar.replaceChildren(chip, others, exch, lounge, turn);
+    const life = button(`💎 Жизнь${fame(s, me.id) ? ` ★${fame(s, me.id)}` : ""}`, () => this.showLife(), "small chipbtn");
+    this.bar.replaceChildren(chip, others, exch, life, lounge, turn);
   }
 
   private render() {
@@ -428,7 +448,9 @@ export class App {
       const head = h("div", { class: `prow${p.id === s.current ? " now" : ""}${p.bankrupt ? " out" : ""}` },
         h("span", { class: "dot", style: `background:${p.color}` }),
         h("div", { class: "pname" }, h("b", {}, p.id === me && p.name !== "Вы" ? `${p.name} (вы)` : p.name), h("div", { class: "muted tiny" },
-          p.bankrupt ? "банкрот" : `${p.bot ? `бот · ${PERS_NAME[p.personality ?? "trader"]}` : "человек"} · клеток ${cells.length} · уровней ${levels}${p.inCasino ? " · в казино" : ""}`)),
+          p.bankrupt ? "банкрот" : `${p.bot ? `бот · ${PERS_NAME[p.personality ?? "trader"]}` : "человек"} · клеток ${cells.length} · уровней ${levels}${p.inCasino ? " · в казино" : ""}`),
+          p.bankrupt || (!p.lux.length && !p.buffs.length) ? "" : h("div", { class: "tiny lux-line" },
+            `★${fame(s, p.id)} · ${[...p.lux.map((l) => LUX[l.kind].name), ...p.buffs.map((b) => EXPERIENCES[b.kind].name.toLowerCase())].join(", ")}`)),
         h("div", { class: "pmoney" }, p.id === me ? h("b", {}, `${fmt(p.money)} млн ₽`) : h("span", { class: "muted tiny" }, "деньги скрыты")));
       const grid = p.id === me || p.bankrupt ? "" : h("div", { class: "cardgrid small" }, ...cells.map((i) => this.rivalCard(i)));
       return h("div", { class: "pblock" }, head, grid);
@@ -448,7 +470,7 @@ export class App {
       h("div", { class: "cbody" },
         h("div", { class: "crow" }, h("b", {}, c.name), h("span", { class: "muted" }, p.construction ? `стройка → ${p.construction.target}` : p.level ? `ур. ${p.level}` : p.mortgaged ? "залог" : "участок")),
         h("div", { class: "cmeta" }, p.branch && c.industry ? INDUSTRIES[c.industry].branches[p.branch] : c.industry ? INDUSTRIES[c.industry].name : "транспорт / энергия"),
-        h("div", { class: "cmeta" }, `аренда ${fmt(rentFor(s, i))}${income ? ` · доход ${fmt(income)}/раунд` : ""}`),
+        h("div", { class: "cmeta" }, `аренда ${fmt(rentFor(s, i))}${income ? ` · доход ${fmt(income)}/раунд` : ""}${p.ad ? ` · 📣 ${AD[p.ad.kind].name.toLowerCase()}` : ""}`),
         h("div", { class: "cmeta" }, soldLots(p) ? `у акционеров ${soldLots(p) * 10}% · 10% = ${fmt(lotPrice(s, i))}` : `акции не продавались · 10% = ${fmt(lotPrice(s, i))}`)));
     el.addEventListener("click", () => { sfx.click(); this.showDeal(i); });
     return el;
@@ -619,7 +641,7 @@ export class App {
     const status = site ? `стройка → ур. ${site.target}` : p.mortgaged ? "в залоге" : p.level ? `ур. ${p.level}` : "участок";
     const body = h("div", { class: "cbody" },
       h("div", { class: "crow" }, h("b", {}, c.name), h("span", { class: "muted" }, status)),
-      h("div", { class: "cmeta" }, `аренда ${fmt(rentFor(s, i))}`));
+      h("div", { class: "cmeta" }, `аренда ${fmt(rentFor(s, i))}${p.ad ? ` · 📣 ещё ${p.ad.rounds} х.` : ""}`));
     if (site) {
       body.append(h("div", { class: "prog" }, h("div", { style: `width:${Math.min(100, site.progress)}%` })),
         h("div", { class: "cmeta" }, tappable ? `${Math.floor(Math.min(100, site.progress))}% · тапайте!` : `${Math.floor(Math.min(100, site.progress))}%`));
@@ -805,8 +827,17 @@ export class App {
   /** Банк: кредиты под залог своих компаний или акций. */
   private bankSection(me: number, myTurn: boolean, run: (a: Action) => void): Node[] {
     const s = this.s, pl = s.players[me];
-    const out: Node[] = [h("h3", {}, "🏦 Банк: кредит под залог")];
-    out.push(h("div", { class: "muted tiny" }, `До 60% стоимости залога. Проценты ${LOAN_RATE * 100}% от суммы каждый ваш ход. Срок — 5 раундов: не вернули — банк забирает залог. Компания в залоге продолжает приносить аренду.`));
+    const out: Node[] = [h("h3", {}, "🏦 Банк: вклад под процент")];
+    out.push(h("div", { class: "muted tiny" }, `${DEPOSIT_RATE * 100}% от вклада каждый ваш ход. Снять можно в любой свой ход; если не хватит на платёж — банк сам снимет со вклада. Вклад считается в капитале. Выгодно, когда деньги лежат без дела: соперник не отнимет, казино не проиграете.`));
+    const depIn = Object.assign(h("input", { type: "number", class: "price", min: "1", step: "50", id: "dep-amount" }), { value: String(Math.max(0, Math.floor(pl.money / 2 / 50) * 50)) });
+    out.push(h("div", { class: "item" },
+      h("div", {}, h("b", {}, `На вкладе ${fmt(pl.deposit)}`), h("span", { class: "muted" }, pl.deposit ? ` · следующий ход +${fmt(Math.floor(pl.deposit * DEPOSIT_RATE))}` : "")),
+      h("div", { class: "row offerbox" }, depIn,
+        button("Положить", () => run({ t: "deposit", amount: Number(depIn.value) }), myTurn ? "primary" : "disabled"),
+        button("Снять", () => run({ t: "withdraw", amount: Math.min(pl.deposit, Number(depIn.value)) }), myTurn && pl.deposit ? "" : "disabled"),
+        pl.deposit ? button("Снять всё", () => run({ t: "withdraw", amount: pl.deposit }), myTurn ? "ghost" : "ghost disabled") : "")));
+    out.push(h("h3", {}, "🏦 Банк: кредит под залог"));
+    out.push(h("div", { class: "muted tiny" }, `До ${Math.round(loanShare(s, me) * 100)}% стоимости залога. Проценты ${Math.round(loanRate(s, me) * 100)}% от суммы каждый ваш ход${pl.lux.some((l) => l.kind === "mansion") ? " (особняк: банк вам доверяет)" : ""}. Срок — 5 раундов: не вернули — банк забирает залог. Компания в залоге продолжает приносить аренду.`));
     for (const l of pl.loans) {
       out.push(h("div", { class: "item offer" },
         h("div", {}, h("b", {}, `Кредит ${fmt(l.amount)}`), ` под ${l.kind === "company" ? `«${BOARD[l.cell].name}»` : `акции «${BOARD[l.cell].name}»`} · вернуть до ${l.due}-го раунда (сейчас ${s.round})`),
@@ -931,6 +962,83 @@ export class App {
     if (sheet) sheet.scrollTop = keep;
   }
 
+  /** «Жизнь»: роскошь (статус), отдых и семья, реклама своих компаний. */
+  private showLife() {
+    const s = this.s, me = this.meId, pl = s.players[me];
+    const myTurn = s.current === me && (s.phase === "roll" || s.phase === "end");
+    const run = (a: Action) => {
+      void this.run(me, a).then((r) => {
+        if (!r.ok) { this.toast(r.error ?? "Нельзя", "warn"); sfx.alert(); }
+        if (this.modalView === "life" || !r.ok) this.showLife();
+        this.renderTopBar();
+      });
+    };
+    const keep = this.modalView === "life" ? this.modal.querySelector(".sheet")?.scrollTop ?? 0 : 0;
+    const f = fame(s, me);
+    const sec: Node[] = [];
+    sec.push(h("div", { class: "perks" }, h("b", {}, `Статус ★${f}`), ` — +${Math.round(f * FAME_RENT * 100)}% к аренде и доходу всех ваших компаний. `,
+      "Каждая звезда даёт +3%. Звёзды дают вещи (пока они ваши) и вечеринки, отдых, подарки (на 3 хода). Со статусом боты уступают в сделках и охотнее идут в складчину. ",
+      `Всё купленное стоит на вашем участке в центре поля — соперники видят. Налог на роскошь: ${LUX_TAX * 100}% с вещей, ${EXP_TAX * 100}% с вечеринки и отдыха; на клетке «Налог на роскошь» — ${fmt(luxuryTaxCell(s, me))} (75 + 5% стоимости вещей).`));
+
+    sec.push(h("h3", {}, "💎 Роскошь"));
+    if (pl.lux.length) {
+      for (const it of pl.lux) {
+        const d = it.value - it.paid;
+        sec.push(h("div", { class: "item" },
+          h("div", { class: "item-head" }, h("b", {}, LUX[it.kind].name), h("span", { class: "muted" }, ` · ★${LUX[it.kind].fame} · стоит сейчас ${fmt(it.value)}`),
+            d ? h("span", { class: d > 0 ? "up" : "down" }, ` ${d > 0 ? "▲" : "▼"}${fmt(Math.abs(d))}`) : ""),
+          button(`Продать за ${fmt(it.value)}`, () => run({ t: "sellLux", id: it.id }), myTurn ? "small ghost" : "small ghost disabled")));
+      }
+    }
+    for (const k of Object.keys(LUX) as LuxKind[]) {
+      const spec = LUX[k], cost = luxCost(k);
+      if (pl.lux.filter((l) => l.kind === k).length >= spec.max) continue;
+      const pay = luxPayback(s, me, k);
+      sec.push(h("div", { class: "item" },
+        h("div", { class: "item-head" }, h("b", {}, spec.name), h("span", { class: "muted" }, ` · ★${spec.fame} · ${fmt(spec.price)} + налог ${fmt(cost - spec.price)}`)),
+        h("div", { class: "muted tiny" }, spec.perk),
+        h("div", { class: `tiny ${pay ? "up" : "muted"}` }, pay ? `При ваших доходах окупится статусом примерно за ${pay} кр. (с учётом перепродажи)` : "Пока не окупится: мало доходных компаний или партия скоро кончится. Берите для удовольствия или позже."),
+        h("div", { class: "row" }, button(`Купить за ${fmt(cost)}`, () => run({ t: "buyLux", kind: k }), myTurn && pl.money >= cost ? "primary" : "disabled"))));
+    }
+
+    sec.push(h("h3", {}, "🌴 Отдых и семья"));
+    for (const k of Object.keys(EXPERIENCES) as ExpKind[]) {
+      const spec = EXPERIENCES[k], cost = expCost(k), on = pl.buffs.find((b) => b.kind === k);
+      const extra = k === "party" && pl.lux.some((l) => l.kind === "yacht") ? " На яхте — ★8!" : "";
+      sec.push(h("div", { class: "item" },
+        h("div", { class: "item-head" }, h("b", {}, spec.name), h("span", { class: "muted" }, ` · ★${spec.fame} на ${spec.rounds} хода · ${fmt(cost)}${k === "gifts" ? " без налога" : " с налогом"}`)),
+        h("div", { class: "muted tiny" }, spec.perk + extra),
+        k === "gifts" ? h("div", { class: "tiny muted" }, `Семейная заначка: ${fmt(pl.stash)} из ${STASH_MAX}`) : "",
+        on ? h("div", { class: "tiny up" }, `Действует ещё ${on.rounds} х.`)
+          : h("div", { class: "row" }, button(`${k === "party" ? "Устроить" : k === "vacation" ? "Поехать" : "Подарить"} за ${fmt(cost)}`, () => run({ t: "experience", kind: k }), myTurn && pl.money >= cost ? "primary" : "disabled"))));
+    }
+
+    sec.push(h("h3", {}, "📣 Реклама своих компаний"));
+    sec.push(h("div", { class: "muted tiny" }, `${AD.flyers.name}: ${AD.flyers.text}. ${AD.tv.name}: ${AD.tv.text}. Продажи — деньги каждый ваш ход, даже если к вам никто не зашёл; акционеры получают свою долю. Чем доходнее компания, тем выгоднее реклама; каждая следующая кампания одновременно дороже на 15%.`));
+    const mine = Object.keys(s.props).map(Number).filter((i) => s.props[i].owner === me).sort((a, b) => rentFor(s, b, 7, false) - rentFor(s, a, 7, false));
+    if (!mine.length) sec.push(h("div", { class: "hint" }, "Рекламировать пока нечего — купите компанию."));
+    for (const i of mine) {
+      const p = s.props[i];
+      const r = rentFor(s, i, 7, false);
+      const row = h("div", { class: "row" });
+      if (p.ad) row.append(h("span", { class: "tiny up" }, `${AD[p.ad.kind].name}: ещё ${p.ad.rounds} х.`));
+      else if (p.mortgaged) row.append(h("span", { class: "tiny muted" }, "в залоге"));
+      else for (const k of Object.keys(AD) as AdKind[]) {
+        const c = adCost(s, me, i, k);
+        const back = Math.round(r * AD[k].sales * AD[k].rounds);
+        row.append(button(`${AD[k].name} · ${fmt(c)} (продажи ≈ ${fmt(back)})`, () => run({ t: "advertise", cell: i, kind: k }), myTurn && pl.money >= c ? "" : "disabled"));
+      }
+      sec.push(h("div", { class: "item" }, h("div", { class: "item-head" }, h("b", {}, BOARD[i].name), h("span", { class: "muted" }, ` · аренда ${fmt(r)}`)), row));
+    }
+
+    this.openModal(h("h2", {}, "Жизнь олигарха"),
+      h("div", { class: "muted" }, myTurn ? `У вас ${fmt(pl.money)} млн ₽ · на вкладе ${fmt(pl.deposit)}` : "Покупать и запускать рекламу можно в свой ход — до броска или в конце хода."),
+      ...sec);
+    this.modal.dataset.view = "life";
+    const sheet = this.modal.querySelector(".sheet");
+    if (sheet) sheet.scrollTop = keep;
+  }
+
   private promptBid(pid: number): Promise<number> {
     const s = this.s, pl = s.players[pid], pend = s.pending;
     if (pend?.kind !== "auction") return Promise.resolve(0);
@@ -1008,6 +1116,10 @@ export class App {
         "Не хватает на покупку — «Купить в складчину»: позовите кого хотите и раздайте до 40% долей, они заплатят свою часть.",
         "Банк («Биржа и банк»): кредит до 60% стоимости залога — своей компании или акций; 5% за ход, через 5 раундов не вернули — залог у банка.",
         "У здания одна ветка развития: выбрали — остальные закрыты. Сменить можно, снеся постройки (вернётся 50% вложений).",
+        "Вклад в банке: 2% за каждый ваш ход, снять можно в любой свой ход, при нехватке на платёж банк снимет сам.",
+        "«💎 Жизнь»: спорткар, особняк, яхта, картины дают статус ★ — каждая звезда +3% к аренде и доходу всех ваших компаний. Налог на роскошь 15%. Вещи стоят на вашем участке в центре поля и считаются в капитале.",
+        "Вечеринка (связи в сделках), отдых (стройки −25%), подарки семье (заначка выручит при нехватке денег) — статус на 3 хода.",
+        "Реклама компании: аренда выше и «продажи» каждый ваш ход — деньги, даже если к вам никто не зашёл.",
       ].map((t) => h("li", {}, t))));
   }
 

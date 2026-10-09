@@ -916,5 +916,61 @@
   "category": "props",
   "name": "Кубик",
   "triangles": 1020
+ },
+ {
+  "id": "mansion",
+  "file": "lux/mansion.glb",
+  "category": "lux",
+  "name": "Особняк",
+  "triangles": 552
+ },
+ {
+  "id": "car",
+  "file": "lux/car.glb",
+  "category": "lux",
+  "name": "Спорткар",
+  "triangles": 384
+ },
+ {
+  "id": "yacht",
+  "file": "lux/yacht.glb",
+  "category": "lux",
+  "name": "Яхта",
+  "triangles": 228
+ },
+ {
+  "id": "painting",
+  "file": "lux/painting.glb",
+  "category": "lux",
+  "name": "Картина",
+  "triangles": 132
+ },
+ {
+  "id": "party",
+  "file": "lux/party.glb",
+  "category": "lux",
+  "name": "Вечеринка",
+  "triangles": 892
+ },
+ {
+  "id": "vacation",
+  "file": "lux/vacation.glb",
+  "category": "lux",
+  "name": "Отдых",
+  "triangles": 348
+ },
+ {
+  "id": "gifts",
+  "file": "lux/gifts.glb",
+  "category": "lux",
+  "name": "Подарки",
+  "triangles": 336
+ },
+ {
+  "id": "billboard",
+  "file": "lux/billboard.glb",
+  "category": "lux",
+  "name": "Рекламный щит",
+  "triangles": 72
  }
 ]

@@ -3,7 +3,7 @@
 import { Action, GameEvent, GameState, Result } from "../engine/engine";
 import { Transport } from "./transport";
 
-export const PROTOCOL = 1;
+export const PROTOCOL = 2;
 
 export interface LobbySeat { name: string; kind: "host" | "guest" | "bot" }
 
