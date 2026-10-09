@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GameConfig, GameState, act, capital, newGame, rentFor } from "../src/engine/engine";
+import { GameConfig, GameState, act, capital, companyValue, handValue, lotPrice, newGame, rentFor } from "../src/engine/engine";
 import { playOut } from "../src/engine/runner";
 
 const players = (n: number, bot = false): GameConfig["players"] =>
@@ -208,5 +208,101 @@ describe("партии ботов", () => {
       for (const p of s.players) expect(p.money).toBeGreaterThanOrEqual(0);
       expect(capital(s, s.winner!)).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("биржа", () => {
+  const own = () => {
+    const s = game(3);
+    s.props[39].owner = 0; // Москва, 400
+    return s;
+  };
+
+  it("владелец выставляет до 40%, покупатель платит владельцу, цена растёт", () => {
+    const s = own();
+    const price0 = lotPrice(s, 39);
+    expect(price0).toBe(40);
+    expect(act(s, 0, { t: "listShares", cell: 39, lots: 5 }).ok).toBe(false); // оставить 60%
+    expect(act(s, 0, { t: "listShares", cell: 39, lots: 2 }).ok).toBe(true);
+    pass(s);
+    const m0 = s.players[0].money, m1 = s.players[1].money;
+    const p1 = lotPrice(s, 39);
+    expect(act(s, 1, { t: "buyShares", cell: 39, lots: 1 }).ok).toBe(true);
+    expect(s.props[39].holders[1]).toBe(1);
+    expect(s.players[1].money).toBe(m1 - p1);
+    expect(s.players[0].money).toBe(m0 + p1);
+    expect(lotPrice(s, 39)).toBeGreaterThan(p1);
+  });
+
+  it("аренда делится между владельцем и акционерами", () => {
+    const s = own();
+    s.props[39].holders = { 1: 3 }; // 30% у второго игрока
+    s.players[2].money = 1500;
+    s.current = 2;
+    s.players[2].pos = 37;
+    roll(s, 1, 1);
+    const rent = (s.pending as { amount: number }).amount;
+    const o0 = s.players[0].money, h1 = s.players[1].money;
+    act(s, 2, { t: "payRent" });
+    expect(s.players[1].money - h1).toBe(Math.round(rent * 0.3));
+    expect(s.players[0].money - o0).toBe(rent - Math.round(rent * 0.3));
+  });
+
+  it("прямое предложение человеку: принять — лот и деньги переходят", () => {
+    const s = own();
+    expect(act(s, 0, { t: "offerShares", cell: 39, lots: 1, to: 1, price: 50 }).ok).toBe(true);
+    expect(s.offers.length).toBe(1);
+    const id = s.offers[0].id;
+    expect(act(s, 2, { t: "acceptOffer", id }).ok).toBe(false); // не тому
+    expect(act(s, 1, { t: "acceptOffer", id }).ok).toBe(true);
+    expect(s.props[39].holders[1]).toBe(1);
+    expect(s.players[1].money).toBe(1450);
+  });
+
+  it("стоимость компании зависит от спроса, капитал учитывает доли", () => {
+    const s = own();
+    const v0 = companyValue(s, 39);
+    s.props[39].holders = { 1: 2 };
+    expect(capital(s, 0)).toBe(1500 + Math.round(v0 * 0.8));
+    s.props[39].demand = 1.5;
+    expect(companyValue(s, 39)).toBe(Math.round(v0 * 1.5));
+  });
+});
+
+describe("казино", () => {
+  it("блэкджек: подсчёт очков с тузами", () => {
+    expect(handValue([1, 13])).toBe(21);
+    expect(handValue([1, 1, 9])).toBe(21);
+    expect(handValue([10, 9, 5])).toBe(24);
+  });
+
+  it("казино ожидания: только в чужой ход, не больше 3 ставок и 10% денег", () => {
+    const s = game(3);
+    expect(act(s, 0, { t: "lounge", game: "slots", amount: 50 }).ok).toBe(false); // свой ход
+    pass(s);
+    expect(act(s, 0, { t: "lounge", game: "slots", amount: 500 }).ok).toBe(false); // > 10%
+    for (let k = 0; k < 3; k++) expect(act(s, 0, { t: "lounge", game: "roulette", choice: "red", amount: 10 }).ok).toBe(true);
+    expect(act(s, 0, { t: "lounge", game: "slots", amount: 10 }).ok).toBe(false);
+  });
+
+  it("тотализатор срабатывает на ближайшем броске", () => {
+    const s = game(2);
+    pass(s); // ходит игрок 1
+    const m = s.players[0].money;
+    expect(act(s, 0, { t: "tote", choice: "seven", amount: 100 }).ok).toBe(true);
+    s.players[1].pos = 20;
+    roll(s, 3, 4);
+    expect(s.players[0].money).toBe(m - 100 + 560);
+    expect(s.players[0].tote).toBeNull();
+  });
+
+  it("блэкджек в ожидании: ставка списывается, раздача доигрывается", () => {
+    const s = game(2);
+    pass(s);
+    expect(act(s, 0, { t: "loungeBj", amount: 100 }).ok).toBe(true);
+    let guard = 0;
+    while (s.players[0].bj && guard++ < 10) act(s, 0, { t: "bjStand" });
+    expect(s.players[0].bj).toBeNull();
+    expect(s.events.some((e) => e.type === "casino" && e.game === "Блэкджек" && e.data?.done)).toBe(true);
   });
 });

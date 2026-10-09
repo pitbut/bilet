@@ -4,6 +4,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { BOARD, INDUSTRIES } from "../engine/board";
 import { GameState } from "../engine/engine";
+import { sfx } from "./sound";
 
 const S = 2.2; // шаг клетки
 const LABEL_DEPTH = 1.0;
@@ -80,7 +81,7 @@ export class BoardScene {
   private dice: THREE.Object3D[] = [];
   private center!: THREE.Mesh;
   private centerSig = "";
-  hopTime = 0.32;
+  hopTime = 0.42;
   safeTop = 56;
   safeBottom = 80;
   safeRight = 0;
@@ -465,12 +466,13 @@ export class BoardScene {
     const ends = this.dice.map((_, k) => new THREE.Vector3(-1.1 + k * 2.2, 0.44, 0.5 + k * 0.4));
     const spins = this.dice.map(() => new THREE.Euler(Math.random() * 6 + 6, Math.random() * 6, Math.random() * 6 + 4));
     this.dice.forEach((d) => { d.visible = true; });
+    sfx.dice();
     // камера опускается к месту падения кубиков
     const diceTarget = new THREE.Vector3(0, 0.6, 1.0);
     const near = this.camera.aspect < 1 ? 13 : 9;
     this.controls.enabled = false;
     void this.flyTo(diceTarget.clone().add(new THREE.Vector3(0, near * 0.75, near * 0.66)), diceTarget, 0.6);
-    await this.tween(0.9, (k) => {
+    await this.tween(1.1, (k) => {
       const e = 1 - Math.pow(1 - k, 3);
       this.dice.forEach((d, i) => {
         d.position.lerpVectors(starts[i], ends[i], e);
@@ -545,25 +547,54 @@ export class BoardScene {
   }
 
   /** Ход фишки «с кинематографом»: пауза → вид сверху с меткой → наезд 30° и проводка → отъезд на обзор. */
+  /** Крупный план клетки: показать прокачку (стройку или готовое здание), потом вернуться к обзору. */
+  async closeUp(cellI: number, hold = 1.8) {
+    if (this.hopTime === 0 || !this.home) return;
+    const f = this.hopTime / 0.42;
+    const p = cellPos(cellI);
+    const target = new THREE.Vector3(p.x, 0.5, p.z);
+    const out = new THREE.Vector3(p.x, 0, p.z).normalize();
+    const d = this.camera.aspect < 1 ? 8 : 4.6;
+    const pos = target.clone().addScaledVector(out, d * Math.cos(0.75)).add(new THREE.Vector3(0, d * Math.sin(0.75), 0));
+    this.controls.enabled = false;
+    try {
+      sfx.whoosh();
+      await this.flyTo(pos, target, 1.0 * f);
+      // медленный облёт вокруг здания
+      const a0 = Math.atan2(pos.z - target.z, pos.x - target.x), r = Math.hypot(pos.x - target.x, pos.z - target.z), y = pos.y;
+      await this.tween(hold * f, (k) => {
+        const a = a0 + (k - 0.5) * 0.7;
+        this.camera.position.set(target.x + Math.cos(a) * r, y, target.z + Math.sin(a) * r);
+        this.camera.lookAt(target);
+      });
+      await this.flyTo(this.home.pos, this.home.target, 1.0 * f);
+    } finally {
+      this.controls.enabled = true;
+    }
+  }
+
   async cinematicMove(pid: number, path: number[], n: number, color: string) {
     const t = this.tokens[pid];
     const dest = path[path.length - 1];
     if (this.hopTime === 0) { this.hideDice(); this.placeToken(pid, dest, n); return; }
-    const f = this.hopTime / 0.32; // быстрая анимация — всё короче
+    const f = this.hopTime / 0.42; // быстрая анимация — всё короче
     this.controls.enabled = false;
     try {
-      await this.wait(1.0 * f); // кубики лежат секунду
+      await this.wait(1.3 * f); // кубики лежат чуть больше секунды
       this.hideDice();
       const top = this.topView();
       this.showMarker(dest, pid, color);
-      await this.flyTo(top.pos, top.target, 0.9 * f);
-      await this.wait(1.0 * f);
+      sfx.whoosh();
+      await this.flyTo(top.pos, top.target, 1.3 * f);
+      await this.wait(1.5 * f);
       const start = this.followPose(t.position);
-      await this.flyTo(start.pos, start.target, 0.8 * f);
+      sfx.whoosh();
+      await this.flyTo(start.pos, start.target, 1.2 * f);
       const want = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
       for (const c of path) {
         const from = t.position.clone(), to = this.slot(pid, c, n);
         const ry0 = t.rotation.y, ry1 = cellPos(c).ry;
+        sfx.step();
         await this.tween(this.hopTime, (k) => {
           t.position.lerpVectors(from, to, k);
           t.position.y = 0.12 + Math.sin(k * Math.PI) * 0.6;
@@ -575,9 +606,9 @@ export class BoardScene {
           this.camera.lookAt(this.controls.target);
         });
       }
-      await this.wait(0.35 * f);
+      await this.wait(0.6 * f);
       this.hideMarker();
-      if (this.home) await this.flyTo(this.home.pos, this.home.target, 1.0 * f);
+      if (this.home) await this.flyTo(this.home.pos, this.home.target, 1.4 * f);
     } finally {
       this.hideMarker();
       this.controls.enabled = true;

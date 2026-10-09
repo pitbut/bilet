@@ -37,7 +37,20 @@ export interface Player extends PlayerConfig {
   energy: number;
   doubles: number;
   casinoWinnings: number;
+  /** Ставки в «казино ожидания» за этот круг (пока ходят другие). */
+  loungeBets: number;
+  /** Сделки с акциями за текущий ход (ограничение для ботов). */
+  trades: number;
+  /** Идущая раздача блэкджека. */
+  bj: Blackjack | null;
+  /** Ставка тотализатора на сумму следующего броска. */
+  tote: { choice: ToteChoice; amount: number } | null;
 }
+
+export type ToteChoice = "low" | "seven" | "high";
+export interface Blackjack { bet: number; player: number[]; dealer: number[]; lounge: boolean }
+export interface Listing { seller: number; lots: number }
+export interface Offer { id: number; from: number; to: number; cell: number; lots: number; price: number }
 
 export interface Construction {
   target: number; // строящийся уровень 1..3
@@ -57,6 +70,12 @@ export interface Property {
   invested: number;
   construction: Construction | null;
   fastBonus: boolean;
+  /** Доли других игроков: id → число лотов по 10%. */
+  holders: Record<number, number>;
+  /** Лоты, выставленные на биржу. */
+  listings: Listing[];
+  /** Спрос на акции: множитель цены (1 — норма). */
+  demand: number;
 }
 
 export interface MarketEvent {
@@ -74,6 +93,8 @@ export type Pending =
 
 export type Phase = "roll" | "decide" | "auction" | "casino" | "casinoExit" | "end" | "gameover";
 
+export interface CasinoData { n?: number; reels?: number[]; player?: number[]; dealer?: number[]; done?: boolean; sum?: number }
+
 export type GameEvent =
   | { type: "dice"; player: number; a: number; b: number }
   | { type: "move"; player: number; path: number[]; teleport?: boolean }
@@ -83,7 +104,8 @@ export type GameEvent =
   | { type: "buildDone"; player: number; cell: number; level: number; fast: boolean }
   | { type: "accident"; player: number; cell: number }
   | { type: "card"; player: number; deck: "news" | "gov"; text: string }
-  | { type: "casino"; player: number; game: string; win: number; detail: string }
+  | { type: "casino"; player: number; game: string; win: number; detail: string; data?: CasinoData }
+  | { type: "stock"; text: string; players: number[] }
   | { type: "jackpot"; player: number; amount: number }
   | { type: "market"; title: string }
   | { type: "bankrupt"; player: number; creditor: number | null }
@@ -107,6 +129,8 @@ export interface GameState {
   events: GameEvent[];
   winner: number | null;
   turnCounter: number;
+  offers: Offer[];
+  nextOfferId: number;
   /** Только для тестов: заранее заданные броски. */
   forcedDice?: [number, number][];
 }
@@ -126,6 +150,18 @@ export type Action =
   | { t: "unmortgage"; cell: number }
   | { t: "roulette"; choice: "red" | "black" | "even" | "odd" | number; amount: number }
   | { t: "slots"; amount: number }
+  | { t: "bjStart"; amount: number }
+  | { t: "bjHit" }
+  | { t: "bjStand" }
+  | { t: "tote"; choice: ToteChoice; amount: number }
+  | { t: "lounge"; game: "roulette" | "slots"; choice?: "red" | "black" | "even" | "odd" | number; amount: number }
+  | { t: "loungeBj"; amount: number }
+  | { t: "listShares"; cell: number; lots: number }
+  | { t: "unlistShares"; cell: number }
+  | { t: "buyShares"; cell: number; lots: number }
+  | { t: "offerShares"; cell: number; lots: number; to: number; price: number }
+  | { t: "acceptOffer"; id: number }
+  | { t: "declineOffer"; id: number }
   | { t: "leaveCasino" }
   | { t: "payExit" }
   | { t: "rollDouble" }
@@ -176,16 +212,16 @@ export const randInt = (s: GameState, n: number) => Math.floor(rand(s) * n);
 export function newGame(cfg: GameConfig): GameState {
   const props: Record<number, Property> = {};
   for (const c of BOARD) {
-    if (c.price) props[c.index] = { owner: null, level: 0, branch: null, mortgaged: false, invested: 0, construction: null, fastBonus: false };
+    if (c.price) props[c.index] = { owner: null, level: 0, branch: null, mortgaged: false, invested: 0, construction: null, fastBonus: false, holders: {}, listings: [], demand: 1 };
   }
   const s: GameState = {
     cfg,
     players: cfg.players.map((p, id) => ({
       ...p, id, money: cfg.startMoney ?? START_MONEY, pos: 0, bankrupt: false, inCasino: false,
-      skipNext: false, energy: ENERGY_PER_ROUND, doubles: 0, casinoWinnings: 0,
+      skipNext: false, energy: ENERGY_PER_ROUND, doubles: 0, casinoWinnings: 0, loungeBets: 0, trades: 0, bj: null, tote: null,
     })),
     props, current: 0, round: 1, phase: "roll", pending: null, casinoBets: 0, lastDice: [1, 1],
-    jackpot: 0, market: null, rng: cfg.seed ?? Math.floor(Math.random() * 2 ** 31), events: [], winner: null, turnCounter: 0,
+    jackpot: 0, market: null, offers: [], nextOfferId: 1, rng: cfg.seed ?? Math.floor(Math.random() * 2 ** 31), events: [], winner: null, turnCounter: 0,
   };
   if (cfg.length === "quick") { // ускоритель быстрой партии: по случайной клетке каждому
     const free = BOARD.filter((c) => c.kind === "business").map((c) => c.index);
@@ -279,10 +315,109 @@ export function capital(s: GameState, pid: number): number {
   if (pl.bankrupt) return 0;
   let v = pl.money;
   for (const [i, p] of Object.entries(s.props)) {
-    if (p.owner !== pid) continue;
-    v += (cell(+i).price ?? 0) * (p.mortgaged ? 0.5 : 1) + p.invested;
+    if (p.owner === pid) v += companyValue(s, +i) * ownerLots(p) / 10;
+    else if (p.holders[pid]) v += p.holders[pid] * lotPrice(s, +i);
   }
   return Math.round(v);
+}
+
+// ---------- Биржа ----------
+
+export const LOTS = 10; // компания делится на 10 лотов по 10%
+export const OWNER_MIN_LOTS = 6; // владелец всегда держит не меньше 60%
+
+/** Стоимость компании: цена клетки и вложения × спрос на акции × рыночное событие. */
+export function companyValue(s: GameState, idx: number): number {
+  const c = cell(idx), p = s.props[idx];
+  const mk = c.kind === "transport" ? s.market?.rent.transport ?? 1 : c.industry ? s.market?.rent[c.industry] ?? 1 : 1;
+  const base = (c.price ?? 0) * (p.mortgaged ? 0.5 : 1) + p.invested;
+  return Math.round(base * p.demand * Math.sqrt(mk));
+}
+export const lotPrice = (s: GameState, idx: number) => Math.max(1, Math.round(companyValue(s, idx) / LOTS));
+export const soldLots = (p: Property) => Object.values(p.holders).reduce((a, b) => a + b, 0);
+export const ownerLots = (p: Property) => LOTS - soldLots(p);
+const listedBy = (p: Property, pid: number) => p.listings.filter((l) => l.seller === pid).reduce((a, l) => a + l.lots, 0);
+
+/** Сколько лотов игрок может продать или предложить. */
+export function freeLots(s: GameState, pid: number, idx: number): number {
+  const p = s.props[idx];
+  if (!p || p.owner === null) return 0;
+  if (p.owner === pid) return Math.max(0, ownerLots(p) - OWNER_MIN_LOTS - listedBy(p, pid));
+  return Math.max(0, (p.holders[pid] ?? 0) - listedBy(p, pid));
+}
+
+/** Акции продаются у бизнесов, транспорта и энергетики, у которых есть владелец. */
+export const tradable = (s: GameState, idx: number) => !!s.props[idx] && s.props[idx].owner !== null;
+
+function clampDemand(p: Property) { p.demand = Math.min(3, Math.max(0.4, p.demand)); }
+
+/** Передаёт один лот от продавца покупателю (владелец как продавец — выпуск новой доли). */
+function moveLot(p: Property, from: number, to: number) {
+  if (from !== p.owner) { p.holders[from] -= 1; if (p.holders[from] <= 0) delete p.holders[from]; }
+  if (to !== p.owner) p.holders[to] = (p.holders[to] ?? 0) + 1;
+}
+
+/** Делит деньги, только что полученные владельцем, между акционерами по долям. */
+function shareOut(s: GameState, idx: number, amount: number, what: string) {
+  const p = s.props[idx];
+  if (p.owner === null || amount <= 0) return;
+  for (const [h, lots] of Object.entries(p.holders)) {
+    const hid = +h;
+    if (s.players[hid].bankrupt) continue;
+    const part = Math.round((amount * lots) / LOTS);
+    if (part <= 0) continue;
+    give(s, p.owner, -part, `дивиденды «${cell(idx).name}»`);
+    give(s, hid, part, `дивиденды «${cell(idx).name}» (${lots * 10}%)`);
+  }
+  void what;
+}
+
+function stockEvent(s: GameState, text: string, players: number[]) {
+  emit(s, { type: "stock", text, players });
+  log(s, text);
+}
+
+/** Смена владельца компании: доля нового владельца, если была, сливается с его основной. */
+function transferCompany(s: GameState, idx: number, to: number | null) {
+  const p = s.props[idx];
+  p.listings = p.listings.filter((l) => l.seller !== p.owner);
+  p.owner = to;
+  if (to === null) { p.holders = {}; p.listings = []; p.demand = 1; return; }
+  if (p.holders[to]) { p.listings = p.listings.filter((l) => l.seller !== to); delete p.holders[to]; }
+  s.offers = s.offers.filter((o) => o.cell !== idx);
+}
+
+function buyLots(s: GameState, buyer: number, idx: number, lots: number): number {
+  const p = s.props[idx];
+  let bought = 0;
+  while (bought < lots) {
+    const l = p.listings.find((x) => x.seller !== buyer);
+    if (!l) break;
+    const price = lotPrice(s, idx);
+    if (s.players[buyer].money < price) break;
+    give(s, buyer, -price, `акции «${cell(idx).name}»`);
+    give(s, l.seller, price, `продажа акций «${cell(idx).name}»`);
+    moveLot(p, l.seller, buyer);
+    l.lots -= 1;
+    if (l.lots <= 0) p.listings.splice(p.listings.indexOf(l), 1);
+    p.demand *= 1.06;
+    clampDemand(p);
+    bought++;
+  }
+  return bought;
+}
+
+/** Исполняет прямую сделку: покупатель платит продавцу, лоты переходят. */
+function executeOffer(s: GameState, o: Offer): boolean {
+  const p = s.props[o.cell], buyer = s.players[o.to];
+  if (freeLots(s, o.from, o.cell) < o.lots || buyer.money < o.price * o.lots) return false;
+  give(s, o.to, -o.price * o.lots, `акции «${cell(o.cell).name}»`);
+  give(s, o.from, o.price * o.lots, `продажа акций «${cell(o.cell).name}»`);
+  for (let k = 0; k < o.lots; k++) moveLot(p, o.from, o.to);
+  p.demand *= Math.pow(1.04, o.lots);
+  clampDemand(p);
+  stockEvent(s, `${buyer.name} покупает у ${s.players[o.from].name} ${o.lots * 10}% «${cell(o.cell).name}» за ${o.price * o.lots}`, [o.from, o.to]);
+  return true;
 }
 
 export function canBuild(s: GameState, pid: number, idx: number): { ok: boolean; reason?: string; cost?: number; level?: number } {
@@ -344,6 +479,17 @@ function raiseFunds(s: GameState, pid: number, need: number) {
     if (pl.money >= need) return;
     if (p.construction) { p.construction = null; log(s, `${pl.name}: стройка в «${cell(i).name}» остановлена`); }
   }
+  // срочная продажа чужих акций: компания выкупает их за 80% цены
+  for (const [i, p] of Object.entries(s.props)) {
+    while (pl.money < need && (p.holders[pid] ?? 0) > 0) {
+      give(s, pid, Math.round(lotPrice(s, +i) * 0.8), `срочная продажа акций «${cell(+i).name}»`);
+      p.holders[pid] -= 1;
+      if (p.holders[pid] <= 0) delete p.holders[pid];
+      p.listings = p.listings.filter((l) => l.seller !== pid || (p.holders[pid] ?? 0) >= l.lots);
+      p.demand *= 0.95; clampDemand(p);
+    }
+    if (pl.money >= need) return;
+  }
   for (const { i } of mine.filter((x) => x.p.level === 0 && !x.p.mortgaged)) {
     if (pl.money >= need) return;
     mortgage(s, pid, i);
@@ -372,11 +518,18 @@ function bankrupt(s: GameState, pid: number, creditor: number | null) {
   if (creditor !== null && pl.money > 0) give(s, creditor, pl.money, `имущество ${pl.name}`);
   pl.money = 0;
   pl.bankrupt = true;
-  for (const p of Object.values(s.props)) {
+  s.offers = s.offers.filter((o) => o.from !== pid && o.to !== pid);
+  for (const [i, p] of Object.entries(s.props)) {
+    p.listings = p.listings.filter((l) => l.seller !== pid);
+    const held = p.holders[pid];
+    if (held) { // акции банкрота уходят кредитору (или возвращаются компании)
+      delete p.holders[pid];
+      if (creditor !== null && creditor !== p.owner) p.holders[creditor] = (p.holders[creditor] ?? 0) + held;
+    }
     if (p.owner !== pid) continue;
     p.construction = null;
-    if (creditor !== null) p.owner = creditor;
-    else Object.assign(p, { owner: null, level: 0, branch: null, mortgaged: false, invested: 0, fastBonus: false });
+    if (creditor !== null) transferCompany(s, +i, creditor);
+    else { transferCompany(s, +i, null); Object.assign(p, { level: 0, branch: null, mortgaged: false, invested: 0, fastBonus: false }); }
   }
   emit(s, { type: "bankrupt", player: pid, creditor });
   log(s, `${pl.name} — банкрот`);
@@ -401,16 +554,19 @@ function startTurn(s: GameState) {
   s.pending = null;
   s.casinoBets = 0;
   emit(s, { type: "turn", player: pl.id, round: s.round });
-  // Доход веток «Доход», экспорта зерна и СПГ.
-  let income = 0;
+  pl.loungeBets = 0;
+  pl.trades = 0;
+  // Доход веток «Доход», экспорта зерна и СПГ — с дивидендами акционерам.
   for (const [i, p] of Object.entries(s.props)) {
     if (p.owner !== pl.id || p.mortgaged || p.level === 0) continue;
     const c = cell(+i);
+    let income = 0;
     if (p.branch === "income") income += (c.price ?? 0) * INCOME_SHARE[p.level - 1] * (s.market?.rent[c.industry!] ?? 1);
     if (p.branch === "special" && c.industry === "agro") income += 20 * portsOwned(s, pl.id) * p.level;
     if (p.branch === "special" && c.industry === "gas") income += (c.price ?? 0) * 0.08 * (portsOwned(s, pl.id) ? 2 : 1);
+    income = Math.round(income);
+    if (income > 0) { give(s, pl.id, income, `доход «${c.name}»`); shareOut(s, +i, income, "доход"); }
   }
-  if (income > 0) give(s, pl.id, Math.round(income), "доход предприятий");
   if (pl.skipNext) {
     pl.skipNext = false;
     log(s, `${pl.name} пропускает ход`);
@@ -429,6 +585,10 @@ function nextTurn(s: GameState) {
     if (next <= s.current && !wrapped) { // новый круг
       wrapped = true;
       s.round += 1;
+      for (const p of Object.values(s.props)) { // непроданные лоты давят цену, без сделок спрос возвращается к норме
+        if (p.listings.length) p.demand *= 0.97; else p.demand += (1 - p.demand) * 0.08;
+        clampDemand(p);
+      }
       if (s.market) { s.market.roundsLeft -= 1; if (s.market.roundsLeft <= 0) s.market = null; }
       if (s.round % 3 === 0 && !s.market) {
         const ev = MARKET_EVENTS[randInt(s, MARKET_EVENTS.length)];
@@ -670,20 +830,117 @@ function drawCard(s: GameState, pid: number, deck: "news" | "gov") {
 
 // ---------- Казино ----------
 
+export const TOTE_PAY: Record<ToteChoice, number> = { low: 2.3, seven: 5.6, high: 2.3 };
+export const TOTE_NAME: Record<ToteChoice, string> = { low: "2–6", seven: "ровно 7", high: "8–12" };
+export const LOUNGE_MAX_BETS = 3;
+
+/** Тотализатор: ставки всех игроков на сумму этого броска. */
+function resolveTotes(s: GameState, sum: number) {
+  for (const pl of s.players) {
+    if (!pl.tote || pl.bankrupt) continue;
+    const { choice, amount } = pl.tote;
+    const hit = choice === "low" ? sum <= 6 : choice === "seven" ? sum === 7 : sum >= 8;
+    const win = hit ? Math.round(amount * TOTE_PAY[choice]) : 0;
+    pl.tote = null;
+    pl.money += win;
+    pl.casinoWinnings += win - amount;
+    if (!win) s.jackpot += Math.round(amount * 0.1);
+    emit(s, { type: "casino", player: pl.id, game: "Тотализатор", win: win - amount, detail: `выпало ${sum}, ставка «${TOTE_NAME[choice]}»`, data: { sum } });
+    if (win) emit(s, { type: "money", player: pl.id, delta: win, reason: "тотализатор" });
+  }
+}
+
+export function loungeMax(s: GameState, pid: number) { return Math.max(10, Math.floor(s.players[pid].money * 0.1)); }
+
+/** Можно ли сейчас играть в «казино ожидания»: одиночная игра, ход соперника. */
+export function canLounge(s: GameState, pid: number): string | null {
+  const pl = s.players[pid];
+  if (s.cfg.mode !== "solo") return "Казино ожидания — в игре против ботов";
+  if (pid === s.current) return "Во время своего хода — только на клетке «Казино»";
+  if (pl.loungeBets >= LOUNGE_MAX_BETS) return "Ставки на этот круг закончились";
+  if (pl.money < 20) return "Мало денег";
+  return null;
+}
+
+const cardValue = (c: number) => Math.min(10, c);
+export function handValue(cards: number[]) {
+  let v = cards.reduce((a, c) => a + (c === 1 ? 11 : cardValue(c)), 0);
+  let aces = cards.filter((c) => c === 1).length;
+  while (v > 21 && aces > 0) { v -= 10; aces--; }
+  return v;
+}
+const drawCardBJ = (s: GameState) => 1 + randInt(s, 13);
+
+function finishBJ(s: GameState, pid: number) {
+  const pl = s.players[pid], bj = pl.bj!;
+  const pv = handValue(bj.player);
+  if (pv <= 21) while (handValue(bj.dealer) < 17) bj.dealer.push(drawCardBJ(s));
+  const dv = handValue(bj.dealer);
+  const natural = pv === 21 && bj.player.length === 2;
+  let payout = 0, text: string;
+  if (pv > 21) text = `перебор ${pv}`;
+  else if (natural && !(dv === 21 && bj.dealer.length === 2)) { payout = bj.bet * 2.5; text = "блэкджек!"; }
+  else if (dv > 21 || pv > dv) { payout = bj.bet * 2; text = `${pv} против ${dv}`; }
+  else if (pv === dv) { payout = bj.bet; text = `ничья ${pv}`; }
+  else text = `${pv} против ${dv}`;
+  payout = Math.round(payout);
+  pl.money += payout;
+  pl.casinoWinnings += payout - bj.bet;
+  if (!payout) s.jackpot += Math.round(bj.bet * 0.1);
+  emit(s, { type: "casino", player: pid, game: "Блэкджек", win: payout - bj.bet, detail: text, data: { player: [...bj.player], dealer: [...bj.dealer], done: true } });
+  if (payout) emit(s, { type: "money", player: pid, delta: payout, reason: "блэкджек" });
+  pl.bj = null;
+}
+
+function startBJ(s: GameState, pid: number, amount: number, lounge: boolean) {
+  const pl = s.players[pid];
+  pl.money -= amount;
+  emit(s, { type: "money", player: pid, delta: -amount, reason: "ставка в блэкджек" });
+  pl.bj = { bet: amount, player: [drawCardBJ(s), drawCardBJ(s)], dealer: [drawCardBJ(s)], lounge };
+  if (handValue(pl.bj.player) === 21) finishBJ(s, pid);
+  else emit(s, { type: "casino", player: pid, game: "Блэкджек", win: 0, detail: "раздача", data: { player: [...pl.bj.player], dealer: [...pl.bj.dealer], done: false } });
+}
+
+function spinRoulette(s: GameState, pid: number, amount: number, choice: "red" | "black" | "even" | "odd" | number) {
+  const n = randInt(s, 37);
+  const red = RED_NUMBERS.has(n);
+  let payout = 0;
+  if (typeof choice === "number") payout = n === choice ? amount * 36 : 0;
+  else if (n !== 0) {
+    const hit = (choice === "red" && red) || (choice === "black" && !red) || (choice === "even" && n % 2 === 0) || (choice === "odd" && n % 2 === 1);
+    payout = hit ? amount * 2 : 0;
+  }
+  settleBet(s, pid, amount, payout, "Рулетка", `выпало ${n}${n === 0 ? " (зеро)" : red ? " красное" : " чёрное"}`, { n });
+}
+
+function spinSlots(s: GameState, pid: number, amount: number) {
+  const pl = s.players[pid];
+  const r = [randInt(s, 6), randInt(s, 6), randInt(s, 6)];
+  let payout = 0;
+  if (r[0] === r[1] && r[1] === r[2]) {
+    if (r[0] === 5) {
+      payout = amount * 10 + s.jackpot;
+      emit(s, { type: "jackpot", player: pid, amount: s.jackpot });
+      log(s, `ДЖЕКПОТ! ${pl.name} срывает ${s.jackpot}`);
+      s.jackpot = 0;
+    } else payout = amount * 10;
+  } else if (r[0] === r[1] || r[1] === r[2] || r[0] === r[2]) payout = amount * 1.6;
+  settleBet(s, pid, amount, payout, "Слоты", r.map((k) => SLOT_SYMBOLS[k]).join(" · "), { reels: r });
+}
+
 function maxBet(s: GameState, pid: number) {
   return Math.max(10, Math.floor(s.players[pid].money * 0.2));
 }
 
-function settleBet(s: GameState, pid: number, amount: number, payout: number, game: string, detail: string) {
+function settleBet(s: GameState, pid: number, amount: number, payout: number, game: string, detail: string, data?: CasinoData) {
   const pl = s.players[pid];
   pl.money -= amount;
   const win = Math.round(payout);
   pl.money += win;
   pl.casinoWinnings += win - amount;
   if (win === 0) s.jackpot += Math.round(amount * 0.1);
-  emit(s, { type: "casino", player: pid, game, win: win - amount, detail });
+  emit(s, { type: "casino", player: pid, game, win: win - amount, detail, data });
   emit(s, { type: "money", player: pid, delta: win - amount, reason: game });
-  s.casinoBets += 1;
 }
 
 // ---------- Действия ----------
@@ -704,6 +961,37 @@ export function act(s: GameState, pid: number, a: Action): Result {
     if (!pend.waiting.length) resolveAuction(s);
     return { ok: true };
   }
+  if (a.t === "bjHit" || a.t === "bjStand") {
+    if (!pl.bj) return { ok: false, error: "Раздачи нет" };
+    if (a.t === "bjHit") {
+      pl.bj.player.push(drawCardBJ(s));
+      if (handValue(pl.bj.player) >= 21) finishBJ(s, pid);
+      else emit(s, { type: "casino", player: pid, game: "Блэкджек", win: 0, detail: "ещё карта", data: { player: [...pl.bj.player], dealer: [...pl.bj.dealer], done: false } });
+    } else finishBJ(s, pid);
+    return { ok: true };
+  }
+  if (a.t === "lounge" || a.t === "loungeBj" || (a.t === "tote" && !mine)) {
+    const why = canLounge(s, pid);
+    if (why) return { ok: false, error: why };
+    if (pl.bj) return { ok: false, error: "Сначала доиграйте раздачу" };
+    const amount = Math.round(a.amount);
+    const max = loungeMax(s, pid);
+    if (amount < 10 || amount > max || amount > pl.money) return { ok: false, error: `Ставка от 10 до ${max}` };
+    if (a.t === "tote" && pl.tote) return { ok: false, error: "Ставка тотализатора уже сделана" };
+    pl.loungeBets += 1;
+    if (a.t === "loungeBj") startBJ(s, pid, amount, true);
+    else if (a.t === "tote") { pl.money -= amount; pl.tote = { choice: a.choice, amount }; emit(s, { type: "money", player: pid, delta: -amount, reason: "тотализатор" }); }
+    else if (a.game === "roulette") spinRoulette(s, pid, amount, a.choice ?? "red");
+    else spinSlots(s, pid, amount);
+    return { ok: true };
+  }
+  if (a.t === "acceptOffer" || a.t === "declineOffer") {
+    const o = s.offers.find((x) => x.id === a.id && x.to === pid);
+    if (!o) return { ok: false, error: "Предложение уже неактуально" };
+    s.offers = s.offers.filter((x) => x !== o);
+    if (a.t === "declineOffer") { stockEvent(s, `${pl.name} отказывается от акций «${cell(o.cell).name}»`, [o.from, pid]); return { ok: true }; }
+    return executeOffer(s, o) ? { ok: true } : { ok: false, error: "Сделка не прошла: нет денег или лотов" };
+  }
   if (a.t === "tap") {
     if (mine) return { ok: false, error: "Тапать можно только во время чужого хода" };
     if (s.cfg.mode === "hotseat") return { ok: false, error: "На одном телефоне тапов нет" };
@@ -721,6 +1009,7 @@ export function act(s: GameState, pid: number, a: Action): Result {
       const [d1, d2] = s.forcedDice?.shift() ?? [1 + randInt(s, 6), 1 + randInt(s, 6)];
       s.lastDice = [d1, d2];
       emit(s, { type: "dice", player: pid, a: d1, b: d2 });
+      resolveTotes(s, d1 + d2);
       if (d1 === d2) {
         pl.doubles += 1;
         if (pl.doubles >= 3) { log(s, `${pl.name}: третий дубль подряд`); sendToCasino(s, pid); return { ok: true }; }
@@ -749,11 +1038,12 @@ export function act(s: GameState, pid: number, a: Action): Result {
       const { cell: idx, owner, amount } = s.pending;
       const p = s.props[idx];
       if (a.t === "payRent") {
-        charge(s, pid, amount, owner, `аренда «${cell(idx).name}»`);
+        if (charge(s, pid, amount, owner, `аренда «${cell(idx).name}»`)) shareOut(s, idx, amount, "аренда");
         p.fastBonus = false;
         log(s, `${pl.name} платит аренду ${amount} → ${s.players[owner].name}`);
       } else {
         give(s, owner, Math.round(amount * 0.3), `отработка в «${cell(idx).name}»`);
+        shareOut(s, idx, Math.round(amount * 0.3), "отработка");
         if (p.construction) addProgress(s, idx, 20);
         pl.skipNext = true;
         log(s, `${pl.name} отрабатывает аренду и пропустит ход`);
@@ -796,9 +1086,52 @@ export function act(s: GameState, pid: number, a: Action): Result {
       const prev = s.props[a.cell].owner!;
       give(s, pid, -chk.cost!, `слияние «${cell(a.cell).name}»`);
       give(s, prev, chk.cost!, `продажа «${cell(a.cell).name}»`);
-      s.props[a.cell].owner = pid;
+      transferCompany(s, a.cell, pid);
       emit(s, { type: "buy", player: pid, cell: a.cell });
       log(s, `${pl.name} выкупает «${cell(a.cell).name}» у ${s.players[prev].name} за ${chk.cost} — монополия!`);
+      return { ok: true };
+    }
+    case "listShares": case "unlistShares": case "buyShares": case "offerShares": {
+      if (s.phase !== "roll" && s.phase !== "end") return { ok: false, error: "Биржа — до броска или в конце хода" };
+      if (!tradable(s, a.cell)) return { ok: false, error: "У компании нет владельца" };
+      const p = s.props[a.cell], name = cell(a.cell).name;
+      if (a.t === "unlistShares") {
+        p.listings = p.listings.filter((l) => l.seller !== pid);
+        return { ok: true };
+      }
+      if (a.t === "buyShares") {
+        if (pl.trades >= 6) return { ok: false, error: "Хватит сделок на этот ход" };
+        const n = buyLots(s, pid, a.cell, Math.max(1, a.lots));
+        if (!n) return { ok: false, error: "Нет лотов в продаже или не хватает денег" };
+        pl.trades++;
+        stockEvent(s, `${pl.name} покупает ${n * 10}% «${name}»`, [pid]);
+        return { ok: true };
+      }
+      const lots = Math.max(1, Math.round(a.lots));
+      if (lots > freeLots(s, pid, a.cell)) return { ok: false, error: p.owner === pid ? "Владелец держит не меньше 60%" : "У вас нет столько свободных акций" };
+      if (a.t === "listShares") {
+        const l = p.listings.find((x) => x.seller === pid);
+        if (l) l.lots += lots; else p.listings.push({ seller: pid, lots });
+        pl.trades++;
+        p.demand *= Math.pow(0.97, lots);
+        clampDemand(p);
+        stockEvent(s, `${pl.name} выставляет ${lots * 10}% «${name}» на биржу по ${lotPrice(s, a.cell)} за 10%`, [pid]);
+        return { ok: true };
+      }
+      const to = s.players[a.to];
+      if (!to || to.bankrupt || a.to === pid) return { ok: false, error: "Некому предложить" };
+      const price = Math.max(1, Math.round(a.price));
+      const o: Offer = { id: s.nextOfferId++, from: pid, to: a.to, cell: a.cell, lots, price };
+      pl.trades++;
+      if (to.bot) {
+        const fair = lotPrice(s, a.cell);
+        const ok = price <= fair * 1.15 && to.money - price * lots >= 250;
+        if (!ok) { stockEvent(s, `${to.name} отказывается: ${lots * 10}% «${name}» за ${price * lots} — дорого`, [pid, a.to]); return { ok: true }; }
+        executeOffer(s, o);
+        return { ok: true };
+      }
+      s.offers.push(o);
+      stockEvent(s, `${pl.name} предлагает ${to.name} ${lots * 10}% «${name}» за ${price * lots}`, [pid, a.to]);
       return { ok: true };
     }
     case "overtime": {
@@ -826,39 +1159,23 @@ export function act(s: GameState, pid: number, a: Action): Result {
       p.mortgaged = false;
       return { ok: true };
     }
-    case "roulette": case "slots": {
+    case "roulette": case "slots": case "bjStart": case "tote": {
       if (s.phase !== "casino") return { ok: false, error: "Вы не в казино" };
+      if (pl.bj) return { ok: false, error: "Сначала доиграйте раздачу" };
       if (s.casinoBets >= 3) return { ok: false, error: "Не больше 3 ставок" };
       const amount = Math.round(a.amount);
       if (amount < 10 || amount > maxBet(s, pid) || amount > pl.money) return { ok: false, error: `Ставка от 10 до ${maxBet(s, pid)}` };
-      if (a.t === "roulette") {
-        const n = randInt(s, 37);
-        const red = RED_NUMBERS.has(n);
-        let payout = 0;
-        if (typeof a.choice === "number") payout = n === a.choice ? amount * 36 : 0;
-        else if (n !== 0) {
-          const hit = (a.choice === "red" && red) || (a.choice === "black" && !red) ||
-            (a.choice === "even" && n % 2 === 0) || (a.choice === "odd" && n % 2 === 1);
-          payout = hit ? amount * 2 : 0;
-        }
-        settleBet(s, pid, amount, payout, "Рулетка", `Выпало ${n}${n === 0 ? " (зеро)" : red ? " красное" : " чёрное"}`);
-      } else {
-        const r = [randInt(s, 6), randInt(s, 6), randInt(s, 6)];
-        let payout = 0;
-        if (r[0] === r[1] && r[1] === r[2]) {
-          if (r[0] === 5) {
-            payout = amount * 10 + s.jackpot;
-            emit(s, { type: "jackpot", player: pid, amount: s.jackpot });
-            log(s, `ДЖЕКПОТ! ${pl.name} срывает ${s.jackpot}`);
-            s.jackpot = 0;
-          } else payout = amount * 10;
-        } else if (r[0] === r[1] || r[1] === r[2] || r[0] === r[2]) payout = amount * 1.6;
-        settleBet(s, pid, amount, payout, "Слоты", r.map((k) => SLOT_SYMBOLS[k]).join(" · "));
-      }
+      if (a.t === "tote" && pl.tote) return { ok: false, error: "Ставка тотализатора уже сделана" };
+      s.casinoBets += 1;
+      if (a.t === "roulette") spinRoulette(s, pid, amount, a.choice);
+      else if (a.t === "slots") spinSlots(s, pid, amount);
+      else if (a.t === "bjStart") startBJ(s, pid, amount, false);
+      else { pl.money -= amount; pl.tote = { choice: a.choice, amount }; emit(s, { type: "money", player: pid, delta: -amount, reason: "тотализатор" }); log(s, `${pl.name} ставит ${amount} на «${TOTE_NAME[a.choice]}»`); }
       return { ok: true };
     }
     case "leaveCasino":
       if (s.phase !== "casino") return { ok: false, error: "Вы не в казино" };
+      if (pl.bj && !pl.bj.lounge) finishBJ(s, pid);
       s.phase = "end";
       return { ok: true };
     case "payExit": case "rollDouble": case "stay": {
@@ -874,6 +1191,7 @@ export function act(s: GameState, pid: number, a: Action): Result {
       const [d1, d2] = s.forcedDice?.shift() ?? [1 + randInt(s, 6), 1 + randInt(s, 6)];
       s.lastDice = [d1, d2];
       emit(s, { type: "dice", player: pid, a: d1, b: d2 });
+      resolveTotes(s, d1 + d2);
       pl.inCasino = false;
       if (d1 === d2) {
         s.lastDice = [d1, d2 + 0.5] as [number, number]; // дубль из казино не даёт второго броска

@@ -112,7 +112,7 @@ button.big { width: min(560px, 100%); font-size: 18px; min-height: 54px; margin-
 @media (prefers-reduced-motion: reduce) { .ccard.act { animation: none; box-shadow: 0 0 0 4px rgba(232, 193, 90, 0.55); } }
 
 /* окна */
-.modal { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; padding: 12px; }
+.modal { position: absolute; inset: 0; z-index: 6; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; padding: 12px; }
 .modal.hidden { display: none; }
 .sheet { position: relative; background: #fff; border-radius: 16px; padding: 16px; width: min(640px, 100%); max-height: 100%; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
 .sheet h2 { margin: 0 40px 0 0; font-size: 20px; }
@@ -125,7 +125,7 @@ button.big { width: min(560px, 100%); font-size: 18px; min-height: 54px; margin-
 .branch { flex: 1 1 160px; display: flex; flex-direction: column; gap: 4px; }
 .branch button { width: 100%; }
 label { display: flex; align-items: center; gap: 6px; font-size: 14px; }
-.pass { position: absolute; inset: 0; background: #141c22; color: #fff; display: flex; align-items: center; justify-content: center; text-align: center; z-index: 5; cursor: pointer; }
+.pass { position: absolute; inset: 0; z-index: 7; background: #141c22; color: #fff; display: flex; align-items: center; justify-content: center; text-align: center; cursor: pointer; }
 .pass h1 { font-size: 40px; margin: 0 0 8px; color: #e8c15a; }
 .pass .muted { color: #9aa5b1; }
 
@@ -166,3 +166,53 @@ label { display: flex; align-items: center; gap: 6px; font-size: 14px; }
 .pmoney { text-align: right; font-variant-numeric: tabular-nums; }
 @media (max-width: 600px) { .cards { max-width: 360px; } .chip.me .cap { display: none; } }
 @media (prefers-reduced-motion: reduce) { .mycards.hot { animation: none; } }
+
+/* кнопки вверху */
+.chipbtn.hotbtn { background: #fff8e1; border-color: #e8c15a; font-weight: 700; animation: glow 1.2s ease-in-out infinite; }
+.chipbtn.casbtn { background: #2a1638; color: #ffd54f; border-color: #6b3fa0; }
+.chipbtn.dim { opacity: 0.55; }
+
+/* биржа */
+.up { color: var(--good); font-weight: 700; }
+.down { color: var(--accent); font-weight: 700; }
+.item.offer { border-color: #e8c15a; background: #fffaf0; }
+.offerbox { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.offerbox select, .offerbox input { min-height: 40px; border-radius: 10px; border: 1px solid var(--line); padding: 0 8px; font: inherit; font-size: 14px; background: #fff; }
+.offerbox input { width: 72px; }
+
+/* казино */
+.casino { display: flex; flex-direction: column; gap: 10px; background: radial-gradient(circle at 50% 0%, #1f5f3a, #0f2a1c 75%); color: #f4ecd6; margin: -16px; padding: 16px; border-radius: 16px; }
+.cas-head { display: flex; flex-direction: column; gap: 2px; padding-right: 44px; }
+.cas-title { font: 700 22px Georgia, serif; color: #ffd54f; letter-spacing: 0.02em; }
+.cas-status { font-size: 13px; color: #cfe3d4; font-variant-numeric: tabular-nums; }
+.cas-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.cas-tabs button { background: rgba(255, 255, 255, 0.08); color: #f4ecd6; border-color: rgba(255, 255, 255, 0.2); flex: 1 1 auto; min-height: 40px; }
+.cas-tabs button.on { background: #ffd54f; color: #222; border-color: #ffd54f; font-weight: 700; }
+.cas-stage { display: flex; flex-direction: column; align-items: center; gap: 6px; min-height: 160px; justify-content: center; }
+.cas-result { min-height: 22px; text-align: center; font-weight: 600; }
+.cas-result .plus { color: #7dff9a; } .cas-result .minus { color: #ff8a80; }
+.cas-controls { display: flex; flex-direction: column; gap: 8px; }
+.cas-stake { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.cas-stake b { min-width: 40px; color: #ffd54f; font-size: 18px; }
+.chip-btn { border-radius: 999px; min-height: 36px; padding: 2px 12px; background: #fff; color: #222; border: 3px dashed #c62828; font-weight: 700; }
+.cas-bets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.cas-bets button { flex: 1 1 auto; }
+.cas-bets .green { background: #1f8a3c; color: #fff; border-color: #1f8a3c; }
+.casino .muted { color: #a9c2b2; }
+.wheel { width: min(300px, 70vw, 42vh); height: auto; aspect-ratio: 1; filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.5)); }
+.reels { display: flex; gap: 10px; background: #2a1638; padding: 12px; border-radius: 14px; border: 3px solid #c9a227; }
+.reel { width: 84px; height: 96px; background: #fff; border-radius: 10px; display: grid; place-items: center; font-size: 52px; box-shadow: inset 0 6px 10px rgba(0, 0, 0, 0.25); }
+.reel.stop { animation: pop 0.15s; }
+.bj { width: 100%; display: flex; flex-direction: column; gap: 4px; }
+.hand-label { font-size: 13px; color: #cfe3d4; }
+.hand { display: flex; gap: 6px; min-height: 86px; flex-wrap: wrap; }
+.pcard { width: 58px; height: 82px; background: #fff; color: #222; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; font: 700 22px Georgia, serif; box-shadow: 0 3px 6px rgba(0, 0, 0, 0.4); animation: deal 0.25s ease-out; }
+.pcard .suit { font-size: 24px; }
+.pcard.redc { color: #c62828; }
+.pcard.back { background: repeating-linear-gradient(45deg, #8b1e1e 0 6px, #a82a2a 6px 12px); border: 3px solid #fff; }
+@keyframes deal { from { transform: translateY(-20px) rotate(-8deg); opacity: 0; } }
+.tote { text-align: center; display: flex; flex-direction: column; gap: 8px; }
+.tote-title { font-size: 16px; font-weight: 600; }
+.tote-cur { color: #ffd54f; font-weight: 700; }
+.cas-hint { text-align: center; }
+@media (max-height: 480px) { .wheel { width: min(220px, 40vh); } .cas-stage { min-height: 120px; } .reel { width: 64px; height: 72px; font-size: 40px; } }

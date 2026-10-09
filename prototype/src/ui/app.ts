@@ -1,13 +1,16 @@
+import { CasinoView } from "./casino";
+import { isMuted, setMuted, sfx } from "./sound";
 // Связка правил, 3D-сцены и интерфейса.
 import { BOARD, BRANCH_EFFECTS, BranchId, INDUSTRIES } from "../engine/board";
 import {
-  Action, GameConfig, GameEvent, GameState, act, active, buildCost, canBuild, canTakeover, capital, drainEvents, newGame, rentFor,
+  Action, GameConfig, GameEvent, GameState, act, active, buildCost, canBuild, canLounge, canTakeover, capital, companyValue, drainEvents, freeLots,
+  lotPrice, newGame, ownerLots, rentFor, soldLots,
 } from "../engine/engine";
 import { botStep } from "../engine/runner";
 import { BoardScene } from "./scene";
 
 export type Speed = "normal" | "fast" | "instant";
-const SPEED = { normal: { hop: 0.32, bot: 750 }, fast: { hop: 0.14, bot: 300 }, instant: { hop: 0, bot: 60 } };
+const SPEED = { normal: { hop: 0.42, bot: 800 }, fast: { hop: 0.2, bot: 350 }, instant: { hop: 0, bot: 60 } };
 const CARDS_W = 230;
 const fmt = (n: number) => `${Math.round(n).toLocaleString("ru-RU")}`;
 const PERS_NAME = { shark: "Акула", miser: "Скряга", gambler: "Игроман", trader: "Торгаш" };
@@ -68,6 +71,9 @@ export class App {
     } else {
       Object.assign(st, { top: `${top}px`, left: "auto", right: "8px", width: `${CARDS_W}px`, bottom: "auto" });
       Object.assign(bs, { right: "8px", bottom: "max(10px, env(safe-area-inset-bottom))" });
+      // панель хода не заезжает на кнопку «Мои карточки»
+      const room = this.root.clientWidth - (this.myBtn.getBoundingClientRect().width || 170) - 24;
+      Object.assign(this.panel.style, { left: "8px", right: "auto", transform: "none", width: `${Math.min(640, room)}px` });
     }
     this.toasts.style.top = `${top}px`;
   }
@@ -163,43 +169,76 @@ export class App {
           if (e.teleport) { this.scene.hideDice(); await this.scene.moveToken(e.player, e.path, s.players.length, true); }
           else await this.scene.cinematicMove(e.player, e.path, s.players.length, s.players[e.player].color);
           break;
-        case "money":
+        case "money": {
           this.flashMoney(e.player, e.delta);
+          const inCasino = this.modalView === "casino";
+          if (e.player === this.meId && !inCasino && Math.abs(e.delta) >= 1) {
+            if (e.delta > 0) sfx.coin(); else sfx.pay();
+            if (e.reason.startsWith("дивиденды")) this.toast(`Дивиденды: +${fmt(e.delta)} (${e.reason.replace("дивиденды ", "")})`, "good");
+          }
           break;
+        }
         case "buy":
+          sfx.buy();
           await this.scene.sync(s);
           break;
-        case "buildDone":
+        case "buildStart":
+          sfx.hammer();
           await this.scene.sync(s);
-          this.toast(`${s.players[e.player].name}: «${BOARD[e.cell].name}» — уровень ${e.level}${e.fast ? ". Успел! +20% к аренде" : ""}`, e.fast ? "good" : "");
+          if (!s.players[e.player].bot && this.speed !== "instant" && !this.modalView) await this.scene.closeUp(e.cell, 1.2);
           break;
+        case "buildDone": {
+          await this.scene.sync(s);
+          const human = !s.players[e.player].bot;
+          if (human) sfx.built();
+          this.toast(`${s.players[e.player].name}: «${BOARD[e.cell].name}» — уровень ${e.level}${e.fast ? ". Успел! +20% к аренде" : ""}`, e.fast || human ? "good" : "");
+          if (human && this.speed !== "instant" && !this.modalView) await this.scene.closeUp(e.cell, 2.2);
+          break;
+        }
         case "accident":
+          sfx.alert();
           this.toast(`Авария на стройке «${BOARD[e.cell].name}»!`, "warn");
           break;
         case "card":
+          sfx.card();
           this.toast(`${e.deck === "news" ? "Новости" : "Госзаказ"}: ${e.text}`, "card", 3500);
-          if (this.speed !== "instant") await this.scene.wait(1.2);
+          if (this.speed !== "instant") await this.scene.wait(1.6);
           break;
         case "casino":
+          if (e.player === this.meId && this.modalView === "casino") break; // результат уже в окне казино
+          if (e.data && e.data.done === false) break; // промежуточная раздача блэкджека
+          if (e.player === this.meId) { if (e.win > 0) sfx.win(); else if (e.win < 0) sfx.lose(); }
           this.toast(`${s.players[e.player].name} · ${e.game}: ${e.detail} → ${e.win >= 0 ? "+" : ""}${fmt(e.win)}`, e.win > 0 ? "good" : "");
           break;
         case "jackpot":
+          sfx.jackpot();
           this.toast(`ДЖЕКПОТ! ${s.players[e.player].name} срывает ${fmt(e.amount)} млн ₽`, "good", 5000);
+          break;
+        case "stock":
+          if (e.players.includes(this.meId) || s.cfg.mode === "hotseat") {
+            const toMe = e.text.includes("предлагает") && e.players[1] === this.meId;
+            if (toMe) sfx.alert(); else sfx.stock();
+            this.toast(toMe ? `${e.text} — откройте «Биржу»` : e.text, toMe ? "card" : "", toMe ? 4500 : 2600);
+          }
+          if (this.modalView === "exchange") this.showExchange();
           break;
         case "market":
           this.toast(`Рынок: ${e.title}`, "card", 4000);
           break;
         case "bankrupt":
+          sfx.bankrupt();
           this.scene.hideToken(e.player);
           this.toast(`${s.players[e.player].name} — банкрот`, "warn", 4000);
           break;
         case "turn":
+          if (!s.players[e.player].bot) sfx.turn();
           break;
         case "log":
           this.logLines.push(e.text);
           if (this.logLines.length > 4) this.logLines.shift();
           break;
-        case "buildStart": case "gameover":
+        case "gameover":
+          sfx.win();
           break;
       }
     }
@@ -207,7 +246,7 @@ export class App {
 
   // ---------- Отрисовка ----------
 
-  private render() {
+  private renderTopBar() {
     const s = this.s;
     // вверху — только «я»: в одиночной игре это человек, на одном телефоне — тот, чей сейчас ход (или последний ходивший человек)
     const cur = s.players[s.current];
@@ -220,7 +259,16 @@ export class App {
       h("span", { class: "muted cap" }, `капитал ${fmt(capital(s, me.id))}`));
     const others = button("👥 Игроки", () => this.showPlayers(), "small chipbtn");
     const turn = cur.id !== me.id ? h("div", { class: "chip turnchip" }, h("span", { class: "dot", style: `background:${cur.color}` }), `Ходит ${cur.name}`) : "";
-    this.bar.replaceChildren(chip, others, turn);
+    const offers = s.offers.filter((o) => o.to === me.id).length;
+    const exch = button(`📈 Биржа${offers ? ` · ${offers}` : ""}`, () => this.showExchange(), `small chipbtn${offers ? " hotbtn" : ""}`);
+    const lounge = s.cfg.mode === "solo" && s.current !== me.id && !me.bankrupt && s.phase !== "gameover"
+      ? button("🎰 Казино", () => this.openCasino(true), `small chipbtn${canLounge(s, me.id) ? " dim" : ""} casbtn`) : "";
+    this.bar.replaceChildren(chip, others, exch, lounge, turn);
+  }
+
+  private render() {
+    const s = this.s;
+    this.renderTopBar();
     this.info.replaceChildren(
       h("div", {}, `Раунд ${s.round}${s.cfg.length === "quick" ? `/${s.cfg.quickRounds ?? 15}` : ""}`),
       button("⌖", () => this.scene.resetView(), "small"),
@@ -234,6 +282,8 @@ export class App {
   }
 
   private lastHuman = 0;
+  private get meId() { return (this.soloHuman ?? this.s.players[this.lastHuman] ?? this.humans[0]).id; }
+  private get modalView() { return this.modal.classList.contains("hidden") ? "" : this.modal.dataset.view ?? ""; }
 
   private showPlayers() {
     const s = this.s;
@@ -305,7 +355,7 @@ export class App {
       }
       case "casino":
         title.append(h("div", { class: "sub" }, `Казино · ставок осталось ${3 - s.casinoBets} · джекпот ${fmt(s.jackpot)}`));
-        row.append(button("🎡 Рулетка", () => this.showCasino("roulette"), "primary"), button("🎰 Слоты", () => this.showCasino("slots")), button("Уйти", () => this.doAction({ t: "leaveCasino" })));
+        row.append(button("🎰 Играть в казино", () => this.openCasino(false), "primary"), button("Уйти", () => this.doAction({ t: "leaveCasino" })));
         break;
       case "casinoExit":
         title.append(h("div", { class: "sub" }, "Вы в казино: ход пропускается"));
@@ -468,25 +518,105 @@ export class App {
     this.openModal(h("h2", {}, "Стройки и сделки"), h("div", { class: "muted" }, `Деньги: ${fmt(me.money)} млн ₽ · строить можно до броска и в конце хода`), opts, list);
   }
 
-  private showCasino(game: "roulette" | "slots") {
-    const s = this.s, me = s.players[s.current];
-    const max = Math.max(10, Math.floor(me.money * 0.2));
-    const range = Object.assign(h("input", { type: "range", min: "10", max: String(max), step: "10" }), { value: String(Math.min(max, 50)) });
-    const val = h("b", {}, range.value);
-    range.addEventListener("input", () => { val.textContent = range.value; });
-    const bet = (a: Action) => { this.closeModal(); this.doAction(a); };
-    const amt = () => Number(range.value);
-    const choices = game === "roulette"
-      ? h("div", { class: "row" },
-        button("Красное ×2", () => bet({ t: "roulette", choice: "red", amount: amt() }), "red"),
-        button("Чёрное ×2", () => bet({ t: "roulette", choice: "black", amount: amt() }), "black"),
-        button("Чёт ×2", () => bet({ t: "roulette", choice: "even", amount: amt() })),
-        button("Нечет ×2", () => bet({ t: "roulette", choice: "odd", amount: amt() })),
-        button("Зеро ×36", () => bet({ t: "roulette", choice: 0, amount: amt() })))
-      : h("div", { class: "row" }, button("Крутить", () => bet({ t: "slots", amount: amt() }), "primary"),
-        h("div", { class: "muted tiny" }, "Два одинаковых ×1,6 · три ×10 · три «Кремля» — джекпот"));
-    this.openModal(h("h2", {}, game === "roulette" ? "Рулетка" : "Слоты"),
-      h("div", {}, "Ставка: ", val, ` (до ${max})`), range, choices);
+  /** Казино: lounge = играть, пока ходят другие; иначе — визит на клетку «Казино». */
+  private openCasino(lounge: boolean) {
+    sfx.click();
+    const view = new CasinoView({
+      s: this.s, pid: lounge ? this.meId : this.s.current, lounge, instant: this.speed === "instant",
+      after: () => { this.renderTopBar(); void this.step(); },
+      close: () => this.closeModal(),
+    });
+    this.openModal(view.root);
+    this.modal.dataset.view = "casino";
+  }
+
+  /** Биржа: предложения, свои компании, свои акции и рынок. */
+  private showExchange() {
+    const s = this.s, me = this.meId, pl = s.players[me];
+    const myTurn = s.current === me && (s.phase === "roll" || s.phase === "end") && !this.stepping;
+    const run = (a: Action, by = me) => {
+      const r = act(s, by, a);
+      if (!r.ok) { this.toast(r.error ?? "Нельзя", "warn"); sfx.alert(); } else sfx.stock();
+      this.showExchange();
+      this.renderTopBar();
+      void this.step();
+    };
+    const keep = this.modalView === "exchange" ? this.modal.querySelector(".sheet")?.scrollTop ?? 0 : 0;
+    const trend = (i: number) => {
+      const d = s.props[i].demand;
+      return d > 1.03 ? h("span", { class: "up" }, ` ▲${Math.round((d - 1) * 100)}%`) : d < 0.97 ? h("span", { class: "down" }, ` ▼${Math.round((1 - d) * 100)}%`) : "";
+    };
+    const sections: Node[] = [];
+
+    const offers = s.offers.filter((o) => o.to === me);
+    if (offers.length) {
+      sections.push(h("h3", {}, "Вам предлагают"));
+      for (const o of offers) {
+        sections.push(h("div", { class: "item offer" },
+          h("div", {}, h("b", {}, `${o.lots * 10}% «${BOARD[o.cell].name}»`), ` от ${s.players[o.from].name} за ${fmt(o.price * o.lots)}`),
+          h("div", { class: "muted tiny" }, `На бирже 10% стоит ${fmt(lotPrice(s, o.cell))} · аренда сейчас ${fmt(rentFor(s, o.cell))}, ваша доля дивидендов ${o.lots * 10}%`),
+          h("div", { class: "row" }, button("Принять", () => run({ t: "acceptOffer", id: o.id }), "primary"), button("Отказать", () => run({ t: "declineOffer", id: o.id })))));
+      }
+    }
+
+    const mine = Object.keys(s.props).map(Number).filter((i) => s.props[i].owner === me);
+    sections.push(h("h3", {}, "Мои компании"));
+    if (!mine.length) sections.push(h("div", { class: "hint" }, "Пока нет компаний."));
+    for (const i of mine) {
+      const p = s.props[i];
+      const listed = p.listings.filter((l) => l.seller === me).reduce((a, l) => a + l.lots, 0);
+      const holders = Object.entries(p.holders).map(([id, n]) => `${s.players[+id].name} ${n * 10}%`).join(", ");
+      const row = h("div", { class: "row" });
+      if (freeLots(s, me, i) > 0) {
+        row.append(button(`Выставить 10% за ${fmt(lotPrice(s, i))}`, () => run({ t: "listShares", cell: i, lots: 1 }), myTurn ? "" : "disabled"));
+        const sel = h("select", { class: "who" }, ...s.players.filter((x) => x.id !== me && !x.bankrupt).map((x) => Object.assign(h("option", { value: String(x.id) }, x.name))));
+        const price = Object.assign(h("input", { type: "number", class: "price", min: "1", step: "1" }), { value: String(Math.round(lotPrice(s, i) * 1.05)) });
+        row.append(h("span", { class: "offerbox" }, sel, price, button("Предложить 10%", () => run({ t: "offerShares", cell: i, lots: 1, to: Number((sel as HTMLSelectElement).value), price: Number(price.value) }), myTurn ? "" : "disabled")));
+      }
+      if (listed) row.append(button(`Снять с продажи (${listed * 10}%)`, () => run({ t: "unlistShares", cell: i }), myTurn ? "ghost" : "ghost disabled"));
+      sections.push(h("div", { class: "item" },
+        h("div", { class: "item-head" }, h("b", {}, BOARD[i].name), h("span", { class: "muted" }, ` · у вас ${ownerLots(p) * 10}% · компания ${fmt(companyValue(s, i))}`), trend(i)),
+        h("div", { class: "muted tiny" }, soldLots(p) ? `Акционеры: ${holders}. Они получают свою долю аренды и дохода.` : "Акционеров нет — вся аренда ваша. Можно продать до 40%."),
+        row));
+    }
+
+    const held = Object.keys(s.props).map(Number).filter((i) => (s.props[i].holders[me] ?? 0) > 0);
+    if (held.length) {
+      sections.push(h("h3", {}, "Мои акции"));
+      for (const i of held) {
+        const p = s.props[i], n = p.holders[me];
+        const listed = p.listings.filter((l) => l.seller === me).reduce((a, l) => a + l.lots, 0);
+        const row = h("div", { class: "row" });
+        if (freeLots(s, me, i) > 0) row.append(button(`Продать 10% за ${fmt(lotPrice(s, i))}`, () => run({ t: "listShares", cell: i, lots: 1 }), myTurn ? "" : "disabled"));
+        if (listed) row.append(button(`Снять с продажи (${listed * 10}%)`, () => run({ t: "unlistShares", cell: i }), myTurn ? "ghost" : "ghost disabled"));
+        sections.push(h("div", { class: "item" },
+          h("div", { class: "item-head" }, h("b", {}, `${BOARD[i].name} · ${n * 10}%`), h("span", { class: "muted" }, ` · владелец ${s.players[p.owner!].name} · 10% = ${fmt(lotPrice(s, i))}`), trend(i)),
+          h("div", { class: "muted tiny" }, `С каждой аренды здесь вы получаете ${n * 10}%: сейчас это ${fmt(rentFor(s, i) * n / 10)}`), row));
+      }
+    }
+
+    const market = Object.keys(s.props).map(Number).filter((i) => s.props[i].listings.some((l) => l.seller !== me));
+    sections.push(h("h3", {}, "Биржа"));
+    if (!market.length) sections.push(h("div", { class: "hint" }, "Сейчас никто не продаёт акции."));
+    for (const i of market) {
+      const p = s.props[i];
+      const lots = p.listings.filter((l) => l.seller !== me).reduce((a, l) => a + l.lots, 0);
+      const sellers = [...new Set(p.listings.filter((l) => l.seller !== me).map((l) => s.players[l.seller].name))].join(", ");
+      const per10 = rentFor(s, i) / 10;
+      sections.push(h("div", { class: "item" },
+        h("div", { class: "item-head" }, h("b", {}, BOARD[i].name), h("span", { class: "muted" }, ` · в продаже ${lots * 10}% · продаёт ${sellers}`), trend(i)),
+        h("div", { class: "muted tiny" }, `Владелец ${s.players[p.owner!].name} · аренда ${fmt(rentFor(s, i))} → на 10% приходится ${fmt(per10)} с каждого гостя`),
+        h("div", { class: "row" }, button(`Купить 10% за ${fmt(lotPrice(s, i))}`, () => run({ t: "buyShares", cell: i, lots: 1 }), myTurn && pl.money >= lotPrice(s, i) ? "primary" : "disabled"))));
+    }
+
+    this.openModal(h("h2", {}, "Биржа"),
+      h("div", { class: "muted" }, myTurn
+        ? "Цена растёт, когда акции покупают, и падает, когда их много в продаже. От цены зависит стоимость компании и ваш капитал."
+        : "Покупать и выставлять акции можно в свой ход — до броска или в конце хода. Принять предложение можно в любой момент."),
+      ...sections);
+    this.modal.dataset.view = "exchange";
+    const sheet = this.modal.querySelector(".sheet");
+    if (sheet) sheet.scrollTop = keep;
   }
 
   private promptBid(pid: number): Promise<number> {
@@ -544,6 +674,7 @@ export class App {
     const sp = (v: Speed, t: string) => button(t, () => { this.speed = v; this.scene.hopTime = SPEED[v].hop; this.closeModal(); }, this.speed === v ? "primary" : "");
     this.openModal(h("h2", {}, "Меню"),
       h("div", {}, "Скорость анимации"), h("div", { class: "row" }, sp("normal", "Обычная"), sp("fast", "Быстрая"), sp("instant", "Мгновенно")),
+      h("div", { class: "row" }, button(isMuted() ? "🔇 Звук выключен" : "🔊 Звук включён", () => { setMuted(!isMuted()); this.showMenu(); })),
       h("div", { class: "row" }, button("Правила", () => this.showRules()), button("Выйти в меню", () => { this.closeModal(); this.onExit(); }, "ghost")));
   }
 
@@ -555,7 +686,9 @@ export class App {
         "В чужой ход тапайте по своим стройкам: 60 тапов за раунд, каждый +1%. Успели раньше срока — +20% к первой аренде.",
         "Уровень 2 — нужны 2 клетки отрасли, уровень 3 — вся отрасль. Не хватает одной — «Слияние» за двойную цену.",
         "Ветки: «Аренда» — дорого гостям, «Доход» — деньги каждый раунд, «Особая» — уникальный эффект.",
-        "Казино вместо тюрьмы: пропуск хода, но можно сделать до 3 ставок.",
+        "Казино вместо тюрьмы: пропуск хода, но можно сделать до 3 ставок — рулетка, слоты, блэкджек, тотализатор.",
+        "Не хочется смотреть, как ходят боты? Кнопка «🎰 Казино» вверху: до 3 ставок за круг, не больше 10% денег.",
+        "Биржа: продайте до 40% своей компании — акционеры получают свою долю каждой аренды и дохода. Цена акций растёт от покупок и падает от продаж, от неё зависит стоимость компании.",
       ].map((t) => h("li", {}, t))));
   }
 

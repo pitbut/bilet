@@ -1,6 +1,9 @@
 import "./style.css";
 import { GameConfig, Personality } from "./engine/engine";
 import { App, PERSONALITY_NAMES, Speed } from "./ui/app";
+import { unlockAudio } from "./ui/sound";
+
+window.addEventListener("pointerdown", unlockAudio);
 
 const COLORS = ["#e53935", "#1e88e5", "#43a047", "#fdd835", "#8e24aa", "#fb8c00"];
 const TOKENS = ["sedan", "helicopter", "yacht", "safe", "derrick", "goldbar"];
