@@ -88,9 +88,6 @@ button.big { width: min(560px, 100%); font-size: 18px; min-height: 54px; margin-
 
 /* столбец карточек справа */
 .cards { position: absolute; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 2px; }
-.cards.row { flex-direction: row; flex-wrap: nowrap; gap: 8px; overflow-x: auto; overflow-y: hidden; align-items: flex-start; }
-.cards.row > * { flex: 0 0 200px; }
-.cards.row > .cards-head { display: none; }
 .cards-head { background: #e8c15a; color: #222; font-weight: 700; font-size: 12px; padding: 5px 10px; border-radius: 10px; }
 .ccard { flex: none; background: var(--card); border-radius: 12px; overflow: hidden; box-shadow: 0 1px 6px rgba(0, 0, 0, 0.22); border: 2px solid transparent; user-select: none; -webkit-user-select: none; touch-action: manipulation; cursor: pointer; }
 .ccard .band { height: 8px; }
@@ -145,3 +142,27 @@ label { display: flex; align-items: center; gap: 6px; font-size: 14px; }
 @media (max-width: 600px) {
   .log { display: none; }
 }
+
+/* верхняя строка: только свой баланс */
+.chip.me { padding: 5px 12px 5px 8px; font-size: 14px; }
+.chip.me .cap { font-size: 12px; font-weight: 400; }
+.chipbtn { border-radius: 999px; min-height: 34px; padding: 4px 12px; font-size: 13px; }
+.turnchip { font-size: 13px; color: var(--muted); }
+
+/* кнопка «Мои карточки» и окно */
+.mycards {
+  position: absolute; pointer-events: auto; background: #fff; border: 2px solid #e8c15a; border-radius: 999px;
+  font-weight: 700; font-size: 14px; padding: 8px 14px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25); display: flex; gap: 8px; align-items: center; z-index: 2;
+}
+.mycards.hot { background: #fff8e1; animation: glow 1.2s ease-in-out infinite; }
+.badge { background: var(--accent); color: #fff; font-size: 11px; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.05em; }
+.cardgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+.cardgrid .ccard { min-width: 0; }
+.plist { display: flex; flex-direction: column; gap: 6px; }
+.prow { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; }
+.prow.now { border-color: #e8c15a; background: #fffaf0; }
+.prow.out { opacity: 0.45; }
+.pname { min-width: 0; }
+.pmoney { text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) { .cards { max-width: 360px; } .chip.me .cap { display: none; } }
+@media (prefers-reduced-motion: reduce) { .mycards.hot { animation: none; } }

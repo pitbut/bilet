@@ -85,6 +85,11 @@ export class BoardScene {
   safeBottom = 80;
   safeRight = 0;
   private home: { target: THREE.Vector3; pos: THREE.Vector3 } | null = null;
+  /** Метка «куда идти»: кольцо на клетке и стрелка над ней. */
+  private marker = new THREE.Group();
+  /** Кольцо вокруг фишки того, кто бросил. */
+  private tokenRing!: THREE.Mesh;
+  private ringOwner = -1;
   onCellClick?: (i: number) => void;
 
   constructor(private host: HTMLElement) {
@@ -142,11 +147,22 @@ export class BoardScene {
       this.addLabel(g, i);
     }
 
+    this.buildMarker();
     this.bindPointer();
     window.addEventListener("resize", () => this.resize());
     this.resize();
     const loop = () => {
       this.controls.update();
+      if (this.marker.visible) {
+        const t = performance.now() / 1000;
+        this.marker.children[0].scale.setScalar(1 + 0.08 * Math.sin(t * 6));
+        this.marker.children[1].position.y = 2.2 + 0.25 * Math.sin(t * 4);
+        this.marker.children[1].rotation.y = t * 2;
+      }
+      if (this.tokenRing.visible && this.ringOwner >= 0) {
+        const tp = this.tokens[this.ringOwner].position;
+        this.tokenRing.position.set(tp.x, 0.13, tp.z);
+      }
       this.renderer.render(this.scene, this.camera);
       requestAnimationFrame(loop);
     };
@@ -449,6 +465,11 @@ export class BoardScene {
     const ends = this.dice.map((_, k) => new THREE.Vector3(-1.1 + k * 2.2, 0.44, 0.5 + k * 0.4));
     const spins = this.dice.map(() => new THREE.Euler(Math.random() * 6 + 6, Math.random() * 6, Math.random() * 6 + 4));
     this.dice.forEach((d) => { d.visible = true; });
+    // камера опускается к месту падения кубиков
+    const diceTarget = new THREE.Vector3(0, 0.6, 1.0);
+    const near = this.camera.aspect < 1 ? 13 : 9;
+    this.controls.enabled = false;
+    void this.flyTo(diceTarget.clone().add(new THREE.Vector3(0, near * 0.75, near * 0.66)), diceTarget, 0.6);
     await this.tween(0.9, (k) => {
       const e = 1 - Math.pow(1 - k, 3);
       this.dice.forEach((d, i) => {
@@ -459,9 +480,109 @@ export class BoardScene {
       });
     });
     await this.wait(0.35);
+    this.controls.enabled = true;
   }
 
   hideDice() { this.dice.forEach((d) => { d.visible = false; }); }
+
+  // ---------- Кинокамера ----------
+
+  private buildMarker() {
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.78, 1.02, 48), new THREE.MeshBasicMaterial({ color: "#ffd54f", transparent: true, opacity: 0.95, side: THREE.DoubleSide, depthWrite: false }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.16;
+    const pin = new THREE.Mesh(new THREE.ConeGeometry(0.32, 0.7, 4), new THREE.MeshStandardMaterial({ color: "#ffd54f", emissive: "#7a5a00" }));
+    pin.rotation.x = Math.PI; // остриём вниз
+    this.marker.add(ring, pin);
+    this.marker.visible = false;
+    this.scene.add(this.marker);
+    this.tokenRing = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.62, 40), new THREE.MeshBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false }));
+    this.tokenRing.rotation.x = -Math.PI / 2;
+    this.tokenRing.visible = false;
+    this.scene.add(this.tokenRing);
+  }
+
+  private showMarker(cellI: number, pid: number, color: string) {
+    const p = cellPos(cellI);
+    this.marker.position.set(p.x, 0, p.z);
+    for (const m of this.marker.children) ((m as THREE.Mesh).material as THREE.MeshBasicMaterial).color.set(color);
+    this.marker.visible = true;
+    (this.tokenRing.material as THREE.MeshBasicMaterial).color.set(color);
+    this.ringOwner = pid;
+    this.tokenRing.visible = true;
+  }
+
+  private hideMarker() { this.marker.visible = false; this.tokenRing.visible = false; this.ringOwner = -1; }
+
+  /** Плавный перелёт камеры (с замедлением в начале и конце). */
+  private flyTo(pos: THREE.Vector3, target: THREE.Vector3, sec: number) {
+    const p0 = this.camera.position.clone(), t0 = this.controls.target.clone();
+    return this.tween(sec, (k) => {
+      const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+      this.camera.position.lerpVectors(p0, pos, e);
+      this.controls.target.lerpVectors(t0, target, e);
+      this.camera.lookAt(this.controls.target);
+    });
+  }
+
+  /** Вид сверху на всё поле. */
+  private topView() {
+    const home = this.home ?? { target: new THREE.Vector3(), pos: new THREE.Vector3(0, 30, 14) };
+    const d = home.pos.distanceTo(home.target) * 1.05;
+    return { target: home.target.clone(), pos: home.target.clone().add(new THREE.Vector3(0, d * 0.985, d * 0.17)) };
+  }
+
+  /** Камера сбоку-сверху (30° к доске) снаружи поля, смотрит на точку p. */
+  private followPose(p: THREE.Vector3) {
+    const out = new THREE.Vector3(p.x, 0, p.z);
+    if (out.lengthSq() < 0.01) out.set(0, 0, 1);
+    out.normalize();
+    const d = this.camera.aspect < 1 ? 14 : 6.5;
+    const el = Math.PI / 6;
+    const target = new THREE.Vector3(p.x, 0.4, p.z);
+    const pos = target.clone().addScaledVector(out, d * Math.cos(el)).add(new THREE.Vector3(0, d * Math.sin(el), 0));
+    return { pos, target };
+  }
+
+  /** Ход фишки «с кинематографом»: пауза → вид сверху с меткой → наезд 30° и проводка → отъезд на обзор. */
+  async cinematicMove(pid: number, path: number[], n: number, color: string) {
+    const t = this.tokens[pid];
+    const dest = path[path.length - 1];
+    if (this.hopTime === 0) { this.hideDice(); this.placeToken(pid, dest, n); return; }
+    const f = this.hopTime / 0.32; // быстрая анимация — всё короче
+    this.controls.enabled = false;
+    try {
+      await this.wait(1.0 * f); // кубики лежат секунду
+      this.hideDice();
+      const top = this.topView();
+      this.showMarker(dest, pid, color);
+      await this.flyTo(top.pos, top.target, 0.9 * f);
+      await this.wait(1.0 * f);
+      const start = this.followPose(t.position);
+      await this.flyTo(start.pos, start.target, 0.8 * f);
+      const want = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
+      for (const c of path) {
+        const from = t.position.clone(), to = this.slot(pid, c, n);
+        const ry0 = t.rotation.y, ry1 = cellPos(c).ry;
+        await this.tween(this.hopTime, (k) => {
+          t.position.lerpVectors(from, to, k);
+          t.position.y = 0.12 + Math.sin(k * Math.PI) * 0.6;
+          t.rotation.y = ry0 + (ry1 - ry0) * k;
+          const fp = this.followPose(t.position);
+          want.pos.copy(fp.pos); want.target.copy(fp.target);
+          this.camera.position.lerp(want.pos, 0.12);
+          this.controls.target.lerp(want.target, 0.18);
+          this.camera.lookAt(this.controls.target);
+        });
+      }
+      await this.wait(0.35 * f);
+      this.hideMarker();
+      if (this.home) await this.flyTo(this.home.pos, this.home.target, 1.0 * f);
+    } finally {
+      this.hideMarker();
+      this.controls.enabled = true;
+    }
+  }
 
   // ---------- Анимация ----------
 

@@ -9,7 +9,6 @@ import { BoardScene } from "./scene";
 export type Speed = "normal" | "fast" | "instant";
 const SPEED = { normal: { hop: 0.32, bot: 750 }, fast: { hop: 0.14, bot: 300 }, instant: { hop: 0, bot: 60 } };
 const CARDS_W = 230;
-const CARDS_ROW_H = 212;
 const fmt = (n: number) => `${Math.round(n).toLocaleString("ru-RU")}`;
 const PERS_NAME = { shark: "Акула", miser: "Скряга", gambler: "Игроман", trader: "Торгаш" };
 const BRANCH_TITLE: Record<BranchId, string> = { rent: "Аренда", income: "Доход", special: "Особая" };
@@ -42,6 +41,7 @@ export class App {
   private info = h("div", { class: "info" });
   private panel = h("div", { class: "panel" });
   private cards = h("div", { class: "cards" });
+  private myBtn = h("button", { class: "mycards" });
   private logBox = h("div", { class: "log" });
   private toasts = h("div", { class: "toasts" });
   private modal = h("div", { class: "modal hidden" });
@@ -55,21 +55,19 @@ export class App {
   private fitLater: () => void = () => {};
   private get portrait() { return this.root.clientWidth < this.root.clientHeight; }
 
-  /** Ставит столбец карточек справа (горизонтально) или лентой над панелью (вертикально). */
+  /** Карточка клетки хода — справа (горизонтально) или над панелью (вертикально); кнопка «Мои карточки» — внизу справа. */
   private placeCards() {
     const H = this.root.clientHeight;
     const top = this.bar.getBoundingClientRect().bottom + 6;
     const panelTop = this.panel.getBoundingClientRect().top || H - 80;
-    const st = this.cards.style;
-    this.cards.classList.toggle("row", this.portrait);
-    const ps = this.panel.style;
+    const st = this.cards.style, bs = this.myBtn.style;
     if (this.portrait) {
-      Object.assign(ps, { left: "", right: "", transform: "", width: "" });
-      Object.assign(st, { top: "auto", left: "8px", right: "8px", width: "auto", bottom: `${H - panelTop + 6}px`, height: `${CARDS_ROW_H}px` });
+      Object.assign(st, { top: "auto", left: "8px", right: "8px", width: "auto", bottom: `${H - panelTop + 6}px` });
+      Object.assign(bs, { right: "8px", bottom: `${H - panelTop + 6}px` });
+      if (this.cards.childElementCount) bs.bottom = `${H - this.cards.getBoundingClientRect().top + 6}px`;
     } else {
-      // панель хода — слева от столбца карточек, столбец — во всю высоту справа
-      Object.assign(ps, { left: "8px", right: `${CARDS_W + 16}px`, transform: "none", width: "auto" });
-      Object.assign(st, { top: `${top}px`, left: "auto", right: "8px", width: `${CARDS_W}px`, bottom: "max(10px, env(safe-area-inset-bottom))", height: "auto" });
+      Object.assign(st, { top: `${top}px`, left: "auto", right: "8px", width: `${CARDS_W}px`, bottom: "auto" });
+      Object.assign(bs, { right: "8px", bottom: "max(10px, env(safe-area-inset-bottom))" });
     }
     this.toasts.style.top = `${top}px`;
   }
@@ -79,15 +77,15 @@ export class App {
     const stage = h("div", { class: "stage" });
     root.append(stage);
     this.scene = new BoardScene(stage);
-    this.ui = h("div", { class: "ui" }, this.bar, this.info, this.cards, this.logBox, this.panel, this.toasts, this.modal);
+    this.ui = h("div", { class: "ui" }, this.bar, this.info, this.cards, this.myBtn, this.logBox, this.panel, this.toasts, this.modal);
+    this.myBtn.addEventListener("click", () => this.showMyCards());
     root.append(this.ui);
     this.scene.onCellClick = (i) => this.showCell(i);
     const measure = () => {
       this.placeCards();
       this.scene.safeTop = this.bar.getBoundingClientRect().bottom + 6;
-      const cardsTop = this.portrait ? this.cards.getBoundingClientRect().top : root.clientHeight;
-      this.scene.safeBottom = Math.max(70, root.clientHeight - Math.min(cardsTop, this.panel.getBoundingClientRect().top) + 6);
-      this.scene.safeRight = this.portrait ? 0 : CARDS_W + 16;
+      this.scene.safeBottom = Math.max(70, root.clientHeight - this.panel.getBoundingClientRect().top + 6);
+      this.scene.safeRight = 0;
     };
     window.addEventListener("resize", () => { measure(); this.scene.fitView(); });
     this.fitLater = () => { measure(); this.scene.fitView(); };
@@ -149,6 +147,7 @@ export class App {
     if (this.stepping) return; // идёт анимация — повторные нажатия игнорируем
     const r = act(this.s, this.s.current, a);
     if (!r.ok) this.toast(r.error ?? "Нельзя", "warn");
+    else { this.panel.replaceChildren(h("div", { class: "hint" }, "…")); this.cards.replaceChildren(); } // пока идёт анимация — без кнопок
     void this.step();
   }
 
@@ -161,8 +160,8 @@ export class App {
           await this.scene.rollDice(e.a, e.b);
           break;
         case "move":
-          await this.scene.moveToken(e.player, e.path, s.players.length, e.teleport);
-          this.scene.hideDice();
+          if (e.teleport) { this.scene.hideDice(); await this.scene.moveToken(e.player, e.path, s.players.length, true); }
+          else await this.scene.cinematicMove(e.player, e.path, s.players.length, s.players[e.player].color);
           break;
         case "money":
           this.flashMoney(e.player, e.delta);
@@ -210,13 +209,18 @@ export class App {
 
   private render() {
     const s = this.s;
-    this.bar.replaceChildren(...s.players.map((p) => h("div", {
-      class: `chip${p.id === s.current ? " current" : ""}${p.bankrupt ? " out" : ""}`, "data-pid": String(p.id),
-    },
-      h("span", { class: "dot", style: `background:${p.color}` }),
-      h("span", { class: "name" }, p.bot ? `${p.name} 🤖` : p.name),
-      h("span", { class: "money" }, `${fmt(p.money)}`),
-    )));
+    // вверху — только «я»: в одиночной игре это человек, на одном телефоне — тот, чей сейчас ход (или последний ходивший человек)
+    const cur = s.players[s.current];
+    if (!cur.bot) this.lastHuman = cur.id;
+    const me = this.soloHuman ?? s.players[this.lastHuman] ?? this.humans[0];
+    const chip = h("div", { class: `chip me${me.bankrupt ? " out" : ""}`, "data-pid": String(me.id) },
+      h("span", { class: "dot", style: `background:${me.color}` }),
+      h("span", { class: "name" }, me.name),
+      h("span", { class: "money" }, `${fmt(me.money)} млн ₽`),
+      h("span", { class: "muted cap" }, `капитал ${fmt(capital(s, me.id))}`));
+    const others = button("👥 Игроки", () => this.showPlayers(), "small chipbtn");
+    const turn = cur.id !== me.id ? h("div", { class: "chip turnchip" }, h("span", { class: "dot", style: `background:${cur.color}` }), `Ходит ${cur.name}`) : "";
+    this.bar.replaceChildren(chip, others, turn);
     this.info.replaceChildren(
       h("div", {}, `Раунд ${s.round}${s.cfg.length === "quick" ? `/${s.cfg.quickRounds ?? 15}` : ""}`),
       button("⌖", () => this.scene.resetView(), "small"),
@@ -224,8 +228,56 @@ export class App {
     );
     this.logBox.replaceChildren(...this.logLines.map((l) => h("div", {}, l)));
     this.renderCards();
+    this.renderMyBtn();
     this.renderPanel();
     this.placeCards();
+  }
+
+  private lastHuman = 0;
+
+  private showPlayers() {
+    const s = this.s;
+    const rows = [...s.players].sort((a, b) => capital(s, b.id) - capital(s, a.id)).map((p) => {
+      const cells = Object.values(s.props).filter((q) => q.owner === p.id);
+      const levels = cells.reduce((a, q) => a + q.level, 0);
+      return h("div", { class: `prow${p.id === s.current ? " now" : ""}${p.bankrupt ? " out" : ""}` },
+        h("span", { class: "dot", style: `background:${p.color}` }),
+        h("div", { class: "pname" }, h("b", {}, p.name), h("div", { class: "muted tiny" },
+          p.bankrupt ? "банкрот" : `${p.bot ? `бот · ${PERS_NAME[p.personality ?? "trader"]}` : "человек"} · клеток ${cells.length} · уровней ${levels}${p.inCasino ? " · в казино" : ""}`)),
+        h("div", { class: "pmoney" }, h("b", {}, fmt(p.money)), h("div", { class: "muted tiny" }, `капитал ${fmt(capital(s, p.id))}`)));
+    });
+    this.openModal(h("h2", {}, "Игроки"), h("div", { class: "muted" }, "Деньги и капитал в млн ₽, по убыванию капитала"), h("div", { class: "plist" }, ...rows));
+  }
+
+  /** Окно «Мои карточки»: все клетки игрока; по стройкам тапают в чужой ход прямо здесь. */
+  private showMyCards() {
+    const s = this.s;
+    const me = this.soloHuman ?? s.players[this.lastHuman] ?? this.humans[0];
+    const mine = Object.entries(s.props).filter(([, p]) => p.owner === me.id).map(([i]) => +i)
+      .sort((a, b) => Number(!!s.props[b].construction) - Number(!!s.props[a].construction) || a - b);
+    const canTap = s.cfg.mode === "solo" && s.current !== me.id && s.phase !== "gameover";
+    const grid = h("div", { class: "cardgrid" }, ...mine.map((i) => this.ownedCard(me.id, i, canTap)));
+    const building = mine.some((i) => s.props[i].construction);
+    const head = building
+      ? (canTap ? `Бригада: ${me.energy} тапов в этом раунде — тапайте по стройкам` : s.cfg.mode === "solo" ? "Тапать по стройкам можно, пока ходят соперники" : "На одном телефоне стройки идут сами, по ходам соперников")
+      : "Стройки запускаются в «Стройки и сделки»";
+    const keep = this.modal.dataset.view === "mycards" ? this.modal.querySelector(".sheet")?.scrollTop ?? 0 : 0;
+    this.openModal(h("h2", {}, `Мои карточки · ${mine.length}`), h("div", { class: "muted" }, head),
+      mine.length ? grid : h("div", { class: "hint" }, "У вас пока нет клеток — покупайте, когда встанете на свободную."));
+    this.modal.dataset.view = "mycards";
+    const sheet = this.modal.querySelector(".sheet");
+    if (sheet) sheet.scrollTop = keep;
+  }
+
+  private renderMyBtn() {
+    const s = this.s;
+    const me = this.soloHuman ?? s.players[this.lastHuman] ?? this.humans[0];
+    const mine = Object.values(s.props).filter((p) => p.owner === me.id);
+    const sites = mine.filter((p) => p.construction).length;
+    const tapNow = sites > 0 && s.cfg.mode === "solo" && s.current !== me.id && me.energy > 0 && s.phase !== "gameover";
+    this.myBtn.className = `mycards${tapNow ? " hot" : ""}`;
+    this.myBtn.replaceChildren(`🃏 Мои карточки · ${mine.length}`, ...(tapNow ? [h("span", { class: "badge" }, "тапай!")] : []));
+    if (this.modal.dataset.view === "mycards" && !this.modal.classList.contains("hidden")) this.showMyCards();
   }
 
   private renderPanel() {
@@ -272,21 +324,9 @@ export class App {
 
   /** Столбец карточек справа: клетка, где стоит игрок (по ней тапают, чтобы купить или заплатить), и клетки игрока со стройками. */
   private renderCards() {
-    const s = this.s, cur = s.players[s.current];
-    const kids: Node[] = [];
-    if (s.phase !== "gameover" && !cur.bankrupt && !this.waitingPass) kids.push(this.hereCard());
-    const me = this.soloHuman ?? (!cur.bot ? cur : undefined);
-    if (me && !me.bankrupt) {
-      const mine = Object.entries(s.props).filter(([, p]) => p.owner === me.id).map(([i]) => +i)
-        .sort((a, b) => Number(!!s.props[b].construction) - Number(!!s.props[a].construction) || a - b);
-      const canTap = s.cfg.mode === "solo" && s.current !== me.id && s.phase !== "gameover";
-      if (mine.length) {
-        const building = mine.some((i) => s.props[i].construction);
-        kids.push(h("div", { class: "cards-head" }, building && canTap ? `Ваши клетки · бригада: ${me.energy} тапов` : "Ваши клетки"));
-      }
-      for (const i of mine) kids.push(this.ownedCard(me.id, i, canTap));
-    }
-    this.cards.replaceChildren(...kids);
+    const s = this.s, cur = s.players[s.current], pend = s.pending;
+    const deciding = !cur.bot && !this.waitingPass && s.phase === "decide" && pend && (pend.kind === "buy" || pend.kind === "rent");
+    this.cards.replaceChildren(...(deciding ? [this.hereCard()] : []));
   }
 
   private cardShell(i: number, cls: string) {
@@ -347,10 +387,11 @@ export class App {
         const r = act(s, pid, { t: "tap", cell: i });
         if (!r.ok) return;
         const done = s.props[i].construction === null;
-        if (done) { void this.step(); return; }
-        this.renderCards();
-        const fresh = [...this.cards.querySelectorAll(".ccard.mini")].find((n) => n.getAttribute("data-cell") === String(i));
+        if (done) { void this.step(); this.showMyCards(); return; }
+        this.showMyCards();
+        const fresh = [...this.modal.querySelectorAll(".ccard.mini")].find((n) => n.getAttribute("data-cell") === String(i));
         fresh?.classList.add("pop");
+        this.renderMyBtn();
         void this.scene.sync(s);
       });
     } else {
@@ -363,11 +404,12 @@ export class App {
   // ---------- Окна ----------
 
   private openModal(...kids: Node[]) {
+    delete this.modal.dataset.view;
     this.modal.replaceChildren(h("div", { class: "sheet" }, button("✕", () => this.closeModal(), "close"), ...kids));
     this.modal.classList.remove("hidden");
   }
 
-  private closeModal() { this.modal.classList.add("hidden"); this.modal.replaceChildren(); }
+  private closeModal() { this.modal.classList.add("hidden"); this.modal.replaceChildren(); delete this.modal.dataset.view; }
 
   private showBuild() {
     const s = this.s, me = s.players[s.current];
