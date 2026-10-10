@@ -56,7 +56,7 @@
 |---|---|
 | `INTERNET`, `ACCESS_NETWORK_STATE` | загрузка рекламы Яндекса |
 | `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`, `BLUETOOTH_ADVERTISE` (Android 12+) | режим «Несколько телефонов»: найти стол друга и обмениваться ходами |
-| `BLUETOOTH`, `BLUETOOTH_ADMIN`, `ACCESS_FINE_LOCATION` (только Android 11 и старше) | то же; на старых Android поиск Bluetooth-устройств требует разрешения на местоположение. Само местоположение игра не использует |
+| `BLUETOOTH`, `BLUETOOTH_ADMIN`, `ACCESS_FINE_LOCATION` (только Android 11 и ниже) | то же; на старых Android поиск Bluetooth-устройств требует разрешения на местоположение. Само местоположение игра не использует |
 | `VIBRATE` | вибрация при входящем звонке банка или биржи |
 | `AD_ID` | рекламный идентификатор для Рекламной сети Яндекса |
 

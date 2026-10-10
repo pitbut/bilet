@@ -41,6 +41,7 @@ public class YandexAdsPlugin extends Plugin {
         interstitialId = call.getString("interstitialId");
         Activity act = getActivity();
         act.runOnUiThread(() -> {
+            YandexAds.setLocationTracking(false); // местоположение в рекламу не передаём
             YandexAds.initialize(act, () -> { });
             rewardedLoader = new RewardedAdLoader(act);
             interstitialLoader = new InterstitialAdLoader(act);
