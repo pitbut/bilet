@@ -14,6 +14,7 @@ import { ActReply, NetClient, NetHost, NetInfo, migratedTable, nextHostSeat } fr
 import { pickDriver } from "../net/transport";
 import { clearSave, saveGame } from "./save";
 import { CALLERS, showCall } from "./call";
+import { APP_VERSION } from "../version";
 
 export type Speed = "normal" | "fast" | "instant";
 const SPEED = { normal: { hop: 0.42, bot: 800 }, fast: { hop: 0.2, bot: 350 }, instant: { hop: 0, bot: 60 } };
@@ -1025,17 +1026,20 @@ export class App {
   }
 
   /** «Где взять деньги» прямо во время покупки: снять со вклада, кредит, заложить клетку, продать роскошь. */
-  private showFinance(need: number) {
-    const s = this.s, me = s.current, pl = s.players[me];
+  /** back — вернуться к ставке на аукционе (там «не хватает» не считаем). */
+  private showFinance(need: number, pid = this.s.current, back?: () => void) {
+    const s = this.s, me = pid, pl = s.players[me];
     const run = (a: Action) => {
       void this.run(me, a).then((r) => {
         if (!r.ok) { this.toast(r.error ?? "Нельзя", "warn"); sfx.alert(); } else sfx.coin();
         this.render();
+        if (back) { this.showFinance(0, me, back); return; }
         const p = s.pending;
         const lack = p?.kind === "buy" ? (BOARD[p.cell].price ?? 0) - s.players[me].money : 0;
         if (lack > 0) this.showFinance(lack); else { this.closeModal(); this.toast("Денег хватает — тапните по карточке, чтобы купить", "good"); }
       });
     };
+    if (back) need = Math.max(need, pl.deposit);
     const sec: Node[] = [];
     if (pl.deposit > 0) sec.push(h("div", { class: "item" }, h("b", {}, `На вкладе ${fmt(pl.deposit)}`),
       h("div", { class: "row" }, button(`Снять ${fmt(Math.min(pl.deposit, need))}`, () => run({ t: "withdraw", amount: Math.min(pl.deposit, need) }), "primary"),
@@ -1047,7 +1051,9 @@ export class App {
     }
     for (const it of pl.lux) sec.push(h("div", { class: "item" }, h("b", {}, LUX[it.kind].name), " ", button(`Продать +${fmt(it.value)}`, () => run({ t: "sellLux", id: it.id }), "ghost")));
     sec.push(...this.bankSection(me, true, run).slice(3)); // только кредиты
-    this.openModal(h("h2", {}, `Не хватает ${fmt(need)} млн ₽`), h("div", { class: "muted" }, `У вас ${fmt(pl.money)}. Наберите недостающее — и покупайте.`), ...sec);
+    if (back) this.openModal(h("h2", {}, "Деньги на ставку"), h("div", { class: "muted" }, `У вас ${fmt(pl.money)} млн ₽.`), button("← Вернуться к ставке", back, "primary"), ...sec);
+    if (back) this.modal.querySelector(".close")!.addEventListener("click", back); // закрыли — снова к ставке, аукцион не зависает
+    else this.openModal(h("h2", {}, `Не хватает ${fmt(need)} млн ₽`), h("div", { class: "muted" }, `У вас ${fmt(pl.money)}. Наберите недостающее — и покупайте.`), ...sec);
     this.modal.dataset.view = "finance";
   }
 
@@ -1271,6 +1277,7 @@ export class App {
     if (pend?.kind !== "auction") return Promise.resolve(0);
     const c = BOARD[pend.cell];
     return new Promise((res) => {
+      const open = () => {
       const max = pl.money;
       const bank = pend.bank;
       const value = bank ? bankSaleValue(s, bank) : c.price!;
@@ -1283,8 +1290,11 @@ export class App {
           ? `${s.players[bank.debtor].name} не вернул кредит — банк продаёт залог${bank.kind === "company" ? " вместе с постройками" : ""}. Оценка ${fmt(value)}, у вас ${fmt(max)}. Ваша тайная ставка.`
           : `${pl.name}, ваша тайная ставка. Цена клетки ${c.price}, у вас ${fmt(max)}.`),
         h("div", {}, "Ставка: ", val), range,
-        h("div", { class: "row" }, button("Поставить", () => done(Number(range.value)), "primary"), button("Пас", () => done(0))));
+        h("div", { class: "row" }, button("Поставить", () => done(Number(range.value)), "primary"), button("Пас", () => done(0))),
+        button("💰 Добрать денег: вклад, кредит, залог", () => this.showFinance(0, pid, open), "small ghost"));
       this.modal.querySelector(".close")!.addEventListener("click", () => res(0));
+      };
+      open();
     });
   }
 
@@ -1333,6 +1343,7 @@ export class App {
           this.showMenu();
         })),
       this.net ? "" : h("div", { class: "muted tiny" }, "Партия сохраняется сама после каждого хода. Выйдите — и в меню будет «Продолжить партию»."),
+      h("div", { class: "muted tiny" }, `Версия ${APP_VERSION}`),
       h("div", { class: "row" }, button("Правила", () => this.showRules()), button(this.net ? "Выйти в меню" : "Сохранить и выйти", () => { if (!this.net && this.s.phase !== "gameover") saveGame(this.s, this.speed); this.closeModal(); this.onExit(); }, "ghost")));
   }
 

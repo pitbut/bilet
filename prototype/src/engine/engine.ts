@@ -1428,7 +1428,10 @@ export function act(s: GameState, pid: number, a: Action): Result {
     tap(s, pid, a.cell, a.n ?? 1);
     return { ok: true };
   }
-  if (!mine) return { ok: false, error: "Сейчас не ваш ход" };
+  // на аукционе участник может срочно добыть деньги: снять со вклада, взять кредит, заложить клетку, продать роскошь
+  const bidder = s.phase === "auction" && s.pending?.kind === "auction" && s.pending.waiting.includes(pid);
+  const raisingMoney = a.t === "withdraw" || a.t === "takeLoan" || a.t === "mortgage" || a.t === "sellLux";
+  if (!mine && !(bidder && raisingMoney)) return { ok: false, error: "Сейчас не ваш ход" };
 
   switch (a.t) {
     case "roll": {
@@ -1547,7 +1550,7 @@ export function act(s: GameState, pid: number, a: Action): Result {
       return { ok: true };
     }
     case "takeLoan": case "repayLoan": case "demolish": {
-      if (s.phase !== "roll" && s.phase !== "end" && !(s.phase === "decide" && a.t !== "demolish")) return { ok: false, error: "Банк — до броска или в конце хода" };
+      if (s.phase !== "roll" && s.phase !== "end" && !((s.phase === "decide" || bidder) && a.t !== "demolish")) return { ok: false, error: "Банк — до броска или в конце хода" };
       if (a.t === "repayLoan") {
         const l = pl.loans.find((x) => x.id === a.id);
         if (!l) return { ok: false, error: "Кредита нет" };
@@ -1580,7 +1583,7 @@ export function act(s: GameState, pid: number, a: Action): Result {
       return { ok: true };
     }
     case "deposit": case "withdraw": case "buyLux": case "sellLux": case "experience": case "advertise": {
-      const raising = (a.t === "withdraw" || a.t === "sellLux") && s.phase === "decide"; // снять деньги можно и когда не хватает на покупку
+      const raising = (a.t === "withdraw" || a.t === "sellLux") && (s.phase === "decide" || bidder); // снять деньги можно и когда не хватает на покупку или ставку
       if (s.phase !== "roll" && s.phase !== "end" && !raising) return { ok: false, error: "До броска или в конце хода" };
       if (a.t === "deposit" || a.t === "withdraw") {
         const amount = Math.round(a.amount);

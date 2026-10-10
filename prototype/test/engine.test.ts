@@ -599,3 +599,19 @@ describe("звонки банка и биржи", () => {
     expect(s.players[0].loans.length).toBe(1); // это только напоминание
   });
 });
+
+describe("деньги на аукционе", () => {
+  it("участник аукциона может снять со вклада и взять кредит прямо во время торгов", () => {
+    const s = game(2);
+    s.props[37].owner = 1;
+    s.players[1].deposit = 100;
+    s.players[0].pos = 36;
+    roll(s, 1, 2);
+    act(s, 0, { t: "decline" });
+    expect(s.phase).toBe("auction");
+    expect(act(s, 1, { t: "withdraw", amount: 100 }).ok).toBe(true);
+    expect(act(s, 1, { t: "takeLoan", cell: 37, kind: "company", amount: 50 }).ok).toBe(true);
+    expect(act(s, 1, { t: "buyLux", kind: "car" }).ok).toBe(false); // тратить — нельзя, только добывать деньги
+    expect(s.players[1].money).toBe(1650);
+  });
+});

@@ -5,6 +5,7 @@ import { unlockAudio } from "./ui/sound";
 import { NetClient, NetHost } from "./net/session";
 import { FoundTable, pickDriver } from "./net/transport";
 import { clearSave, loadGame } from "./ui/save";
+import { APP_VERSION } from "./version";
 
 window.addEventListener("pointerdown", unlockAudio);
 
@@ -180,7 +181,7 @@ function renderSetup() {
   title.textContent = "ОЛИГАРХ";
   const sub = document.createElement("p");
   sub.className = "muted";
-  sub.textContent = "Прототип · стройки на время, казино, российские города";
+  sub.textContent = `Прототип · версия ${APP_VERSION}`;
   box.append(title, sub);
 
   const savedGame = loadGame();
