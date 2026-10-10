@@ -4,6 +4,7 @@ import { App, PERSONALITY_NAMES, Speed } from "./ui/app";
 import { unlockAudio } from "./ui/sound";
 import { NetClient, NetHost } from "./net/session";
 import { FoundTable, pickDriver } from "./net/transport";
+import { clearSave, loadGame } from "./ui/save";
 
 window.addEventListener("pointerdown", unlockAudio);
 
@@ -14,7 +15,7 @@ const BOT_NAMES = ["Борис", "Семён", "Гена", "Тимур", "Оле
 
 const root = document.getElementById("app")!;
 
-interface Setup { mode: "solo" | "hotseat" | "network"; length: "quick" | "classic"; humans: string[]; bots: number; difficulty: "easy" | "normal" | "hard"; speed: Speed }
+interface Setup { mode: "solo" | "hotseat" | "network"; length: "quick" | "classic"; humans: string[]; bots: number; difficulty: "easy" | "normal" | "hard"; speed: Speed; startCompanies?: boolean }
 const saved = (() => { try { return JSON.parse(localStorage.getItem("oligarh-setup") ?? "null") as Setup | null; } catch { return null; } })();
 const setup: Setup = saved ?? { mode: "solo", length: "quick", humans: ["Вы"], bots: 3, difficulty: "normal", speed: "normal" };
 
@@ -95,7 +96,7 @@ async function hostLobby() {
   const myName = setup.humans[0] ?? "Хозяин";
   let tr;
   try { tr = await driver.host(`Стол ${myName}`); } catch (e) { const b = screen("Не удалось создать стол", String(e)); b.append(btn("Назад", () => renderSetup(), "big ghostlight")); return; }
-  const host = new NetHost(tr, myName);
+  const host = new NetHost(tr, myName, `Стол ${myName}`);
   const draw = () => {
     const box = screen(`Ваш стол: «Стол ${myName}»`, driver.kind === "bluetooth" ? "Пусть остальные нажмут «Найти стол» — телефон виден по Bluetooth." : "В другой вкладке выберите «Несколько телефонов» → «Найти стол».");
     const humans = host.seats();
@@ -107,6 +108,7 @@ async function hostLobby() {
     for (let k = 0; k <= maxBots; k++) opts.push([String(k), String(k)]);
     box.append(field("Боты", seg2(String(setup.bots), opts, (v) => { setup.bots = Number(v); draw(); })));
     box.append(field("Длина партии", seg2(setup.length, [["quick", "Быстрая · 15 раундов"], ["classic", "Классика"]], (v) => { setup.length = v; draw(); })));
+    box.append(startField(() => draw()));
     box.append(field("Анимация на этом телефоне", seg2(setup.speed, [["normal", "Обычная"], ["fast", "Быстрая"], ["instant", "Мгновенно"]], (v) => { setup.speed = v; draw(); })));
     const go = btn(humans.length + setup.bots >= 2 ? "Начать игру" : "Нужен хотя бы один соперник", () => startHost(host), "primary big");
     go.disabled = humans.length + setup.bots < 2;
@@ -132,7 +134,7 @@ function startHost(host: NetHost) {
   players.forEach((p, i) => { p.token = TOKENS[i]; p.color = COLORS[i]; });
   root.replaceChildren();
   const app = new App(root, () => { host.close(); location.reload(); });
-  void app.start({ players, mode: "network", length: setup.length }, setup.speed, host);
+  void app.start({ players, mode: "network", length: setup.length, startCompanies: !!setup.startCompanies }, setup.speed, host);
 }
 
 /** Гость: ищем столы рядом. */
@@ -181,6 +183,23 @@ function renderSetup() {
   sub.textContent = "Прототип · стройки на время, казино, российские города";
   box.append(title, sub);
 
+  const savedGame = loadGame();
+  if (savedGame) {
+    const g = savedGame.state;
+    const card = el("div", "savecard");
+    const when = new Date(savedGame.at).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+    card.append(el("b", "", "Сохранённая партия"),
+      el("div", "muted small", `${g.cfg.mode === "hotseat" ? "На одном телефоне" : "Против ботов"} · раунд ${g.round} · ${g.players.map((p) => p.name).join(", ")} · ${when}`));
+    const row = el("div", "netbtns");
+    row.append(btn("Продолжить партию", () => {
+      root.replaceChildren();
+      const app = new App(root, () => { location.reload(); });
+      void app.resume(g, savedGame.speed);
+    }, "primary big"), btn("Удалить", () => { if (confirm("Удалить сохранённую партию?")) { clearSave(); renderSetup(); } }, "big ghostlight"));
+    card.append(row);
+    box.append(card);
+  }
+
   if (setup.mode !== "hotseat") setup.humans = setup.humans.slice(0, 1);
   if (setup.mode === "hotseat" && setup.humans.length < 2) setup.humans = [setup.humans[0] ?? "Игрок 1", "Игрок 2"];
   const maxBots = 6 - setup.humans.length;
@@ -190,6 +209,7 @@ function renderSetup() {
 
   box.append(modeField());
   box.append(field("Длина партии", seg(setup.length, [["quick", "Быстрая · 15 раундов"], ["classic", "Классика"]], (v) => { setup.length = v; })));
+  box.append(startField(() => renderSetup()));
 
   const names = document.createElement("div");
   names.className = "names";
@@ -227,7 +247,16 @@ function renderSetup() {
   root.append(box);
 }
 
+/** Стартовые предприятия: по умолчанию все начинают с пустыми руками. */
+function startField(redraw: () => void) {
+  const f = field("Стартовое предприятие", seg2(setup.startCompanies ? "yes" : "no", [["no", "Нет — всё покупаем сами"], ["yes", "По одному каждому"]], (v) => { setup.startCompanies = v === "yes"; redraw(); }));
+  f.append(el("div", "muted small", "«По одному каждому» — на старте всем достаётся случайная компания, партия быстрее разгоняется."));
+  return f;
+}
+
 function startGame() {
+  if (loadGame() && !confirm("Новая игра заменит сохранённую партию. Начать?")) return;
+  clearSave();
   try { localStorage.setItem("oligarh-setup", JSON.stringify(setup)); } catch { /* приватный режим */ }
   const players: GameConfig["players"] = [];
   setup.humans.forEach((name) => players.push({ name, bot: false, token: "", color: "" }));
@@ -238,7 +267,7 @@ function startGame() {
   players.forEach((p, i) => { p.token = TOKENS[i]; p.color = COLORS[i]; });
   root.replaceChildren();
   const app = new App(root, () => { location.reload(); });
-  void app.start({ players, mode: setup.mode, length: setup.length }, setup.speed);
+  void app.start({ players, mode: setup.mode, length: setup.length, startCompanies: !!setup.startCompanies }, setup.speed);
 }
 
 renderSetup();

@@ -5,12 +5,14 @@ import { BOARD, BRANCH_EFFECTS, BranchId, INDUSTRIES } from "../engine/board";
 import {
   Action, GameConfig, GameEvent, GameState, Result, act, active, buildCost, canBuild, canLounge, canTakeover, capital, companyValue, drainEvents, freeLots,
   INCOME_SHARE, PUBLIC_PROTECT_LOTS, coopAnswer, loanLimit, WORKOFF_DISCOUNT, lotPrice, newGame, ownerLots, rentFor, soldLots,
-  AD, AdKind, DEPOSIT_RATE, EXPERIENCES, ExpKind, FAME_RENT, LUX, LuxKind, LUX_TAX, EXP_TAX, STASH_MAX, adCost, expCost, fame, luxCost, luxPayback,
+  AD, AdKind, DEPOSIT_RATE, ONSITE_DISCOUNT, demolishAskList, EXPERIENCES, ExpKind, FAME_RENT, LUX, LuxKind, LUX_TAX, EXP_TAX, STASH_MAX, adCost, expCost, fame, luxCost, luxPayback,
   loanRate, loanShare, luxuryTaxCell,
 } from "../engine/engine";
 import { botStep } from "../engine/runner";
 import { BoardScene } from "./scene";
-import { ActReply, NetClient, NetHost } from "../net/session";
+import { ActReply, NetClient, NetHost, NetInfo, migratedTable, nextHostSeat } from "../net/session";
+import { pickDriver } from "../net/transport";
+import { clearSave, saveGame } from "./save";
 
 export type Speed = "normal" | "fast" | "instant";
 const SPEED = { normal: { hop: 0.42, bot: 800 }, fast: { hop: 0.2, bot: 350 }, instant: { hop: 0, bot: 60 } };
@@ -82,7 +84,7 @@ export class App {
   }
   private insure = false;
   /** Сетевая партия: хозяин (seat 0) или гость со своим местом. */
-  private net: { role: "host"; host: NetHost } | { role: "client"; client: NetClient; seat: number } | null = null;
+  private net: { role: "host"; host: NetHost; seat: number } | { role: "client"; client: NetClient; seat: number } | null = null;
   private remoteQueue: { state: GameState; events: GameEvent[] }[] = [];
   private applying = false;
   private bidding = false;
@@ -112,20 +114,7 @@ export class App {
     this.scene.hopTime = SPEED[speed].hop;
     this.s = newGame(cfg);
     if (host) {
-      this.net = { role: "host", host };
-      host.onRequest = (_seat, pid, a) => this.hostRequest(pid, a);
-      host.onGuestLost = (seat) => {
-        const p = this.s.players[seat];
-        p.bot = true; p.personality = p.personality ?? "trader"; p.difficulty = "normal";
-        this.toast(`${p.name} отключился — пока за него играет бот`, "warn", 4000);
-        host.broadcast(this.s, []);
-        void this.step();
-      };
-      host.onGuestBack = (seat) => {
-        this.s.players[seat].bot = false;
-        this.toast(`${this.s.players[seat].name} вернулся в игру`, "good");
-        void this.step();
-      };
+      this.wireHost(host);
       host.start(this.s);
     }
     this.panel.replaceChildren(h("div", { class: "hint" }, "Загрузка поля…"));
@@ -136,22 +125,110 @@ export class App {
     void this.step();
   }
 
-  /** Гость: состояние приходит от хозяина, действия уходят хозяину. */
-  async startClient(client: NetClient, state: GameState, seat: number, speed: Speed) {
-    this.net = { role: "client", client, seat };
+  /** Продолжить сохранённую партию (один телефон). */
+  async resume(state: GameState, speed: Speed) {
     this.speed = speed;
     this.scene.hopTime = SPEED[speed].hop;
     this.s = state;
-    client.onState = (st, events) => { this.remoteQueue.push({ state: st, events }); void this.applyRemote(); };
-    client.onStart = (st) => { this.remoteQueue.push({ state: st, events: [] }); void this.applyRemote(); };
-    client.onAsk = (q) => this.askLocal(this.s.players[seat].name, q);
-    client.onLost = (why) => this.lost(why);
+    this.panel.replaceChildren(h("div", { class: "hint" }, "Загрузка поля…"));
+    await Promise.all([this.scene.setupTokens(this.s), this.scene.setupDice()]);
+    for (const p of this.s.players) if (p.bankrupt) this.scene.hideToken(p.id);
+    await this.scene.sync(this.s);
+    this.render();
+    this.fitLater();
+    this.toast(`Партия продолжается: раунд ${state.round}`, "good");
+    void this.step();
+  }
+
+  /** Хозяин стола: действия гостей, отключения и возвращения. */
+  private wireHost(host: NetHost) {
+    this.net = { role: "host", host, seat: host.seat };
+    host.onRequest = (_seat, pid, a) => this.hostRequest(pid, a);
+    host.onGuestLost = (seat) => {
+      const p = this.s.players[seat];
+      p.bot = true; p.personality = p.personality ?? "trader"; p.difficulty = "normal";
+      this.toast(`${p.name} отключился — пока за него играет бот`, "warn", 4000);
+      host.broadcast(this.s, []);
+      void this.step();
+    };
+    host.onGuestBack = (seat) => {
+      this.s.players[seat].bot = false;
+      this.toast(`${this.s.players[seat].name} вернулся в игру`, "good");
+      void this.step();
+    };
+  }
+
+  /** Гость: состояние приходит от хозяина, действия уходят хозяину. */
+  async startClient(client: NetClient, state: GameState, seat: number, speed: Speed) {
+    this.speed = speed;
+    this.scene.hopTime = SPEED[speed].hop;
+    this.s = state;
+    this.attachClient(client, seat);
     this.scene.lagging = () => this.remoteQueue.length > 2; // сильно отстали от хозяина — догоняем без анимаций
     this.panel.replaceChildren(h("div", { class: "hint" }, "Загрузка поля…"));
     await Promise.all([this.scene.setupTokens(this.s), this.scene.setupDice()]);
     await this.scene.sync(this.s);
     this.render();
     this.fitLater();
+  }
+
+  private attachClient(client: NetClient, seat: number) {
+    this.net = { role: "client", client, seat };
+    client.onState = (st, events) => { this.remoteQueue.push({ state: st, events }); void this.applyRemote(); };
+    client.onStart = (st) => { this.remoteQueue.push({ state: st, events: [] }); void this.applyRemote(); };
+    client.onAsk = (q) => this.askLocal(this.s.players[seat].name, q);
+    client.onLost = (why) => this.lost(why);
+    client.onHostGone = (info) => void this.hostGone(info);
+  }
+
+  /** Хозяин стола вышел: его место занимает гость с наименьшим номером, остальные переподключаются к нему. */
+  private async hostGone(info: NetInfo) {
+    if (this.net?.role !== "client") return;
+    const me = this.net.seat, old = this.net.client;
+    old.close();
+    const next = nextHostSeat(info);
+    if (next === null) { this.lost("Хозяин стола вышел, а других телефонов за столом нет"); return; }
+    while (this.applying) await new Promise((r) => setTimeout(r, 100)); // доигрываем полученные ходы
+    const s = this.s;
+    const newHost = s.players[next];
+    const table = migratedTable(info, newHost.name);
+    const driver = pickDriver();
+    if (next === me) {
+      this.toast(`${info.hostName} вышел — теперь вы хозяин стола, игра идёт через ваш телефон`, "card", 5000);
+      let tr;
+      try { tr = await driver.host(table); } catch (e) { this.lost(`Не удалось открыть стол: ${String(e)}`); return; }
+      const guests = [{ seat: info.hostSeat, name: info.hostName }, ...info.guests.filter((g) => g.seat !== me)];
+      const host = new NetHost(tr, s.players[me].name, table, { seat: me, state: s, guests });
+      for (const g of guests) { // пока не переподключились — за них играет бот
+        const p = s.players[g.seat];
+        if (!p.bankrupt) { p.bot = true; p.personality = p.personality ?? "trader"; p.difficulty = p.difficulty ?? "normal"; }
+      }
+      this.scene.lagging = () => false;
+      this.wireHost(host);
+      this.render();
+      void this.step();
+      return;
+    }
+    this.toast(`${info.hostName} вышел — переключаемся на телефон ${newHost.name}…`, "card", 5000);
+    const deadline = Date.now() + 45000;
+    const tried = new Set<string>();
+    while (Date.now() < deadline) {
+      let found: string | null = null;
+      const stop = await driver.scan((t) => { if (t.name === table && !tried.has(t.id) && !found) found = t.id; }).catch(() => () => {});
+      const t0 = Date.now();
+      while (!found && Date.now() - t0 < 6000) await new Promise((r) => setTimeout(r, 300));
+      stop();
+      if (!found) continue;
+      tried.add(found);
+      try {
+        const tr = await driver.join(found);
+        const client = new NetClient(tr, s.players[me].name);
+        this.attachClient(client, me);
+        this.toast(`Подключились к столу ${newHost.name}`, "good");
+        return;
+      } catch { /* не вышло — ищем ещё */ }
+    }
+    this.lost(`Не нашли новый стол «${table}». Можно найти его вручную: меню → «Найти стол».`);
   }
 
   /** Гость: применяет снимки состояния по очереди и проигрывает их события. */
@@ -197,7 +274,20 @@ export class App {
   }
 
   /** Хозяин: действие гостя. Для складчины сначала спрашиваем живых партнёров. */
+  /** Снос, когда у владельца нет большинства: спрашиваем людей-акционеров. */
+  private async withVotes(pid: number, a: Action): Promise<Action> {
+    if (a.t !== "demolish") return a;
+    const ask = demolishAskList(this.s, a.cell);
+    const approve: number[] = [];
+    for (const h0 of ask) {
+      const ok = await this.askHuman(h0, `${this.s.players[pid].name} хочет снести постройки в «${BOARD[a.cell].name}». Вам вернётся ваша доля половины вложений. Согласны на снос?`);
+      if (ok) approve.push(h0);
+    }
+    return { ...a, approve };
+  }
+
   private async hostRequest(pid: number, a: Action): Promise<ActReply> {
+    a = await this.withVotes(pid, a);
     if (a.t === "buyCoop") {
       const declined: string[] = [];
       for (const part of a.partners) {
@@ -218,16 +308,16 @@ export class App {
   private get humans() { return this.s.players.filter((p) => !p.bot); }
   /** Люди, которые играют на этом устройстве. */
   private get localHumans() {
-    if (this.net) return [this.s.players[this.net.role === "host" ? 0 : this.net.seat]];
+    if (this.net) return [this.s.players[this.net.seat]];
     return this.humans;
   }
   private isLocal(pid: number) {
-    if (this.net) return pid === (this.net.role === "host" ? 0 : this.net.seat) && !this.s.players[pid].bot;
+    if (this.net) return pid === this.net.seat && !this.s.players[pid].bot;
     return !this.s.players[pid].bot;
   }
   private get mePlayer() {
     const s = this.s;
-    if (this.net) return s.players[this.net.role === "host" ? 0 : this.net.seat];
+    if (this.net) return s.players[this.net.seat];
     if (s.cfg.mode === "solo") return this.humans[0] ?? s.players[0];
     return s.players[this.lastHuman] ?? this.humans[0] ?? s.players[0];
   }
@@ -247,6 +337,7 @@ export class App {
         await this.scene.sync(this.s);
         this.render();
         const s = this.s;
+        if (!this.net) { if (s.phase === "gameover") clearSave(); else saveGame(s, this.speed); }
         if (s.phase === "gameover") { this.showGameOver(); break; }
         if (s.phase === "auction" && s.pending?.kind === "auction" && s.pending.waiting.length) {
           const pid = s.pending.waiting[0];
@@ -287,6 +378,7 @@ export class App {
 
   /** Выполнить действие и обновить экран (для окон биржи, сделок, стройки). */
   private async run(pid: number, a: Action): Promise<Result> {
+    if (this.net?.role !== "client") a = await this.withVotes(pid, a);
     const { r } = await this.exec(pid, a);
     void this.step();
     return r;
@@ -591,7 +683,9 @@ export class App {
   private renderCards() {
     const s = this.s, cur = s.players[s.current], pend = s.pending;
     const deciding = this.isLocal(cur.id) && !this.waitingPass && s.phase === "decide" && pend && (pend.kind === "buy" || pend.kind === "rent");
-    this.cards.replaceChildren(...(deciding ? [this.hereCard()] : []));
+    // встал на свою компанию — карточка с прокачкой на месте
+    const onsite = this.isLocal(cur.id) && !this.waitingPass && (s.phase === "roll" || s.phase === "end") && s.landedOwn === cur.pos && BOARD[cur.pos].kind === "business";
+    this.cards.replaceChildren(...(deciding || onsite ? [this.hereCard()] : []));
   }
 
   private cardShell(i: number, cls: string) {
@@ -616,6 +710,12 @@ export class App {
         ` ${s.players[p.owner].name}${p.level ? ` · ур. ${p.level}` : ""} · аренда ${fmt(rentFor(s, cur.pos))}`));
     }
     el.append(body);
+    const onsite = human && s.landedOwn === cur.pos && (s.phase === "roll" || s.phase === "end") && c.kind === "business" && p?.owner === cur.id;
+    if (onsite) {
+      const chk = canBuild(s, cur.id, cur.pos);
+      body.append(h("div", { class: "cmeta" }, `Вы на своей компании: прокачка здесь на ${ONSITE_DISCOUNT * 100}% дешевле`),
+        button(chk.ok || chk.reason === "Не хватает денег" ? `🏗 Прокачать здесь${chk.cost ? ` — ${fmt(chk.cost)}` : ""}` : `🏗 ${chk.reason}`, () => this.showBuild(cur.pos), "small"));
+    }
     if (deciding && pend) {
       if (pend.kind === "buy") {
         const can = cur.money >= c.price!;
@@ -683,7 +783,7 @@ export class App {
 
   private closeModal() { this.modal.classList.add("hidden"); this.modal.replaceChildren(); delete this.modal.dataset.view; }
 
-  private showBuild() {
+  private showBuild(focus?: number) {
     const s = this.s, me = s.players[s.current];
     const opts = h("div", { class: "row" });
     const rush = h("label", {}, Object.assign(h("input", { type: "checkbox" }), { checked: this.rush }), " Штурмовая (вдвое быстрее, 20% риск аварии)");
@@ -692,11 +792,13 @@ export class App {
     ins.querySelector("input")!.addEventListener("change", (e) => { this.insure = (e.target as HTMLInputElement).checked; });
     opts.append(rush, ins);
     const list = h("div", { class: "list" });
-    const owned = Object.entries(s.props).filter(([, p]) => p.owner === me.id).map(([i]) => +i);
+    const owned = Object.entries(s.props).filter(([, p]) => p.owner === me.id).map(([i]) => +i)
+      .sort((a, b) => Number(b === focus) - Number(a === focus));
     if (!owned.length) list.append(h("div", { class: "hint" }, "У вас пока нет клеток."));
     for (const i of owned) {
       const c = BOARD[i], p = s.props[i];
-      const item = h("div", { class: "item" });
+      const item = h("div", { class: `item${i === focus ? " focus" : ""}` });
+      if (s.landedOwn === i) item.append(h("div", { class: "tiny up" }, `Вы здесь — прокачка на ${ONSITE_DISCOUNT * 100}% дешевле`));
       const status = p.construction ? `стройка ур. ${p.construction.target}: ${Math.floor(p.construction.progress)}%`
         : p.level ? `ур. ${p.level} · ${BRANCH_TITLE[p.branch!]}` : p.mortgaged ? "в залоге" : "участок";
       item.append(h("div", { class: "item-head" },
@@ -722,8 +824,8 @@ export class App {
       if (c.kind === "business" && p.level >= 1 && p.branch && !p.construction) {
         const others = (["rent", "income", "special"] as BranchId[]).filter((b) => b !== p.branch).map((b) => `«${INDUSTRIES[c.industry!].branches[b]}»`).join(" и ");
         item.append(h("div", { class: "branchlock" },
-          h("span", {}, `Ветка выбрана: «${INDUSTRIES[c.industry!].branches[p.branch]}». ${others} закрыты — у здания одна ветка. Сменить можно, снеся постройки: вернётся ${fmt(p.invested / 2)}.`),
-          button("Снести", () => { void this.run(me.id, { t: "demolish", cell: i }).then((r) => { if (!r.ok) this.toast(r.error ?? "Нельзя", "warn"); else sfx.hammer(); this.showBuild(); }); }, "small ghost")));
+          h("span", {}, `Ветка выбрана: «${INDUSTRIES[c.industry!].branches[p.branch]}». ${others} закрыты — у здания одна ветка. Сменить можно, снеся постройки: вернётся ${fmt(p.invested / 2)}${soldLots(p) ? ", поделим по долям с акционерами" : ""}${demolishAskList(s, i).length ? "; у вас меньше половины — нужно согласие акционеров" : ""}. После сноса сразу можно строить заново.`),
+          button("Снести", () => { void this.run(me.id, { t: "demolish", cell: i }).then((r) => { if (!r.ok) this.toast(r.error ?? "Нельзя", "warn"); else { sfx.hammer(); this.toast(`«${c.name}» снесено — выберите, что строить`, "good"); } this.showBuild(i); }); }, "small ghost")));
       }
       if (p.construction) {
         const cost = Math.round(buildCost(s, me.id, i, p.construction.target) * 0.1);
@@ -809,7 +911,7 @@ export class App {
   /** Вопрос другому человеку (на одном телефоне — через «Передайте телефон»). */
   private async askHuman(pid: number, question: string): Promise<boolean> {
     const s = this.s, x = s.players[pid];
-    if (this.net?.role === "host" && pid !== 0) return this.net.host.ask(pid, question);
+    if (this.net?.role === "host" && pid !== this.net.seat) return this.net.host.ask(pid, question);
     if (this.localHumans.length > 1) await this.passPhone(x.name, "вопрос о сделке");
     return this.askLocal(x.name, question);
   }
@@ -1096,7 +1198,8 @@ export class App {
     this.openModal(h("h2", {}, "Меню"),
       h("div", {}, "Скорость анимации"), h("div", { class: "row" }, sp("normal", "Обычная"), sp("fast", "Быстрая"), sp("instant", "Мгновенно")),
       h("div", { class: "row" }, button(isMuted() ? "🔇 Звук выключен" : "🔊 Звук включён", () => { setMuted(!isMuted()); this.showMenu(); })),
-      h("div", { class: "row" }, button("Правила", () => this.showRules()), button("Выйти в меню", () => { this.closeModal(); this.onExit(); }, "ghost")));
+      this.net ? "" : h("div", { class: "muted tiny" }, "Партия сохраняется сама после каждого хода. Выйдите — и в меню будет «Продолжить партию»."),
+      h("div", { class: "row" }, button("Правила", () => this.showRules()), button(this.net ? "Выйти в меню" : "Сохранить и выйти", () => { if (!this.net && this.s.phase !== "gameover") saveGame(this.s, this.speed); this.closeModal(); this.onExit(); }, "ghost")));
   }
 
   private showRules() {
@@ -1115,7 +1218,11 @@ export class App {
         "Отработка аренды: платите на 10% меньше, но пропускаете следующий ход.",
         "Не хватает на покупку — «Купить в складчину»: позовите кого хотите и раздайте до 40% долей, они заплатят свою часть.",
         "Банк («Биржа и банк»): кредит до 60% стоимости залога — своей компании или акций; 5% за ход, через 5 раундов не вернули — залог у банка.",
-        "У здания одна ветка развития: выбрали — остальные закрыты. Сменить можно, снеся постройки (вернётся 50% вложений).",
+        "У здания одна ветка развития: выбрали — остальные закрыты. Сменить можно, снеся постройки: вернётся 50% вложений, поделённых по долям с акционерами, и сразу можно строить другое.",
+        "Снести здание без спроса может владелец с большинством (больше 50%). Если у владельца меньше — нужно согласие акционеров, чтобы «за» было больше 50%.",
+        "Встали на свою компанию — прокачка прямо с карточки на 10% дешевле.",
+        "Партия на одном телефоне сохраняется после каждого хода: в меню — «Продолжить партию» или новая игра.",
+        "Игра по Bluetooth: если телефон хозяина стола вышел, хозяином становится следующий телефон, остальные переподключаются сами, а за ушедшего играет бот, пока он не вернётся через «Найти стол».",
         "Вклад в банке: 2% за каждый ваш ход, снять можно в любой свой ход, при нехватке на платёж банк снимет сам.",
         "«💎 Жизнь»: спорткар, особняк, яхта, картины дают статус ★ — каждая звезда +3% к аренде и доходу всех ваших компаний. Налог на роскошь 15%. Вещи стоят на вашем участке в центре поля и считаются в капитале.",
         "Вечеринка (связи в сделках), отдых (стройки −25%), подарки семье (заначка выручит при нехватке денег) — статус на 3 хода.",

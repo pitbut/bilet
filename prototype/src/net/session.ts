@@ -3,9 +3,21 @@
 import { Action, GameEvent, GameState, Result } from "../engine/engine";
 import { Transport } from "./transport";
 
-export const PROTOCOL = 2;
+export const PROTOCOL = 3;
 
 export interface LobbySeat { name: string; kind: "host" | "guest" | "bot" }
+
+/** Кто за столом — рассылается гостям, чтобы при уходе хозяина они сами выбрали нового. */
+export interface NetInfo { table: string; hostSeat: number; hostName: string; guests: { seat: number; name: string; online: boolean }[] }
+
+/** Новый хозяин: гость с наименьшим местом из тех, кто на связи. */
+export function nextHostSeat(info: NetInfo): number | null {
+  const seats = info.guests.filter((g) => g.online && g.seat !== info.hostSeat).map((g) => g.seat).sort((a, b) => a - b);
+  return seats.length ? seats[0] : null;
+}
+
+/** Имя стола после смены хозяина — по нему остальные гости находят нового. */
+export const migratedTable = (info: NetInfo, newHostName: string) => `${info.table.split(" → ")[0]} → ${newHostName}`;
 
 type ToHost =
   | { t: "hello"; name: string; v: number }
@@ -14,8 +26,8 @@ type ToHost =
 
 type ToGuest =
   | { t: "lobby"; seats: LobbySeat[] }
-  | { t: "start"; state: GameState; seat: number }
-  | { t: "state"; state: GameState; events: GameEvent[] }
+  | { t: "start"; state: GameState; seat: number; net: NetInfo }
+  | { t: "state"; state: GameState; events: GameEvent[]; net: NetInfo }
   | { t: "res"; id: number; r: Result; events: GameEvent[] }
   | { t: "ask"; id: number; q: string }
   | { t: "full"; why: string };
@@ -41,7 +53,17 @@ export class NetHost {
   private askId = 1;
   private current: GameState | null = null;
 
-  constructor(private tr: Transport, public hostName: string) {
+  /** Место хозяина в партии (0, а после смены хозяина — место нового). */
+  seat = 0;
+
+  /** resume — продолжение партии новым хозяином: прежние участники вернутся по имени. */
+  constructor(private tr: Transport, public hostName: string, public table = "", resume?: { seat: number; state: GameState; guests: { seat: number; name: string }[] }) {
+    if (resume) {
+      this.seat = resume.seat;
+      this.started = true;
+      this.current = resume.state;
+      this.guests = resume.guests.map((g) => ({ peer: "", name: g.name, seat: g.seat, online: false }));
+    }
     tr.onPeer = (peer, up) => this.peer(peer, up);
     tr.onData = (peer, data) => {
       let m: ToHost;
@@ -51,6 +73,10 @@ export class NetHost {
   }
 
   private send(peer: string, m: ToGuest) { this.tr.send(peer, JSON.stringify(m)); }
+
+  info(): NetInfo {
+    return { table: this.table, hostSeat: this.seat, hostName: this.hostName, guests: this.guests.filter((g) => g.seat !== null).map((g) => ({ seat: g.seat!, name: g.name, online: g.online })) };
+  }
 
   seats(): LobbySeat[] {
     return [{ name: this.hostName, kind: "host" }, ...this.guests.filter((g) => g.online || g.seat !== null).map((g) => ({ name: g.name, kind: "guest" as const }))];
@@ -72,7 +98,7 @@ export class NetHost {
       if (back) { // вернулся после обрыва связи
         back.peer = peer; back.online = true;
         this.onGuestBack(back.seat!);
-        if (this.current) this.send(peer, { t: "start", state: snapshot(this.current), seat: back.seat! });
+        if (this.current) this.send(peer, { t: "start", state: snapshot(this.current), seat: back.seat!, net: this.info() });
         return;
       }
       if (this.started) { this.send(peer, { t: "full", why: "Партия уже идёт" }); return; }
@@ -112,12 +138,12 @@ export class NetHost {
   start(state: GameState) {
     this.started = true;
     this.current = state;
-    for (const g of this.guests) if (g.online && g.seat !== null) this.send(g.peer, { t: "start", state: snapshot(state), seat: g.seat });
+    for (const g of this.guests) if (g.online && g.seat !== null) this.send(g.peer, { t: "start", state: snapshot(state), seat: g.seat, net: this.info() });
   }
 
   broadcast(state: GameState, events: GameEvent[]) {
     this.current = state;
-    const m: ToGuest = { t: "state", state: snapshot(state), events };
+    const m: ToGuest = { t: "state", state: snapshot(state), events, net: this.info() };
     const data = JSON.stringify(m);
     for (const g of this.guests) if (g.online) this.tr.send(g.peer, data);
   }
@@ -149,11 +175,19 @@ export class NetClient {
   onState: (state: GameState, events: GameEvent[]) => void = () => {};
   onAsk: (q: string) => Promise<boolean> = async () => false;
   onLost: (why: string) => void = () => {};
+  /** Хозяин пропал посреди партии — пора выбирать нового. */
+  onHostGone: (info: NetInfo) => void = () => {};
+  info: NetInfo | null = null;
+  private gone = false;
   private reqs = new Map<number, (r: ActReply) => void>();
   private reqId = 1;
 
   constructor(private tr: Transport, public name: string) {
-    tr.onPeer = (_p, up) => { if (!up) this.onLost("Связь с хозяином стола потеряна"); };
+    tr.onPeer = (_p, up) => {
+      if (up || this.gone) return;
+      this.gone = true;
+      if (this.info && this.seat !== null) this.onHostGone(this.info); else this.onLost("Связь с хозяином стола потеряна");
+    };
     tr.onData = (_p, data) => {
       let m: ToGuest;
       try { m = JSON.parse(data) as ToGuest; } catch { return; }
@@ -166,8 +200,8 @@ export class NetClient {
 
   private message(m: ToGuest) {
     if (m.t === "lobby") { this.seats = m.seats; this.onLobby(); }
-    else if (m.t === "start") { this.seat = m.seat; this.onStart(m.state, m.seat); }
-    else if (m.t === "state") this.onState(m.state, m.events);
+    else if (m.t === "start") { this.seat = m.seat; this.info = m.net; this.onStart(m.state, m.seat); }
+    else if (m.t === "state") { this.info = m.net; this.onState(m.state, m.events); }
     else if (m.t === "res") { this.reqs.get(m.id)?.({ r: m.r, events: m.events }); this.reqs.delete(m.id); }
     else if (m.t === "ask") void this.onAsk(m.q).then((yes) => this.send({ t: "askres", id: m.id, yes }));
     else if (m.t === "full") this.onLost(m.why);

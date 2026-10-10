@@ -24,6 +24,16 @@ export interface NetDriver {
 const rid = () => Math.random().toString(36).slice(2, 10);
 const noop = () => {};
 
+/** Транспорт с обработчиками, которые потом заменит сессия. Не литералом: сборщик выбрасывал вызовы «пустых» onPeer. */
+function makeTransport(send: Transport["send"], close: Transport["close"]): Transport {
+  const t = {} as Transport;
+  t.onData = noop;
+  t.onPeer = noop;
+  t.send = send;
+  t.close = close;
+  return t;
+}
+
 // ---------- Вкладки браузера (BroadcastChannel) ----------
 
 type TabMsg =
@@ -43,11 +53,10 @@ export class TabsDriver implements NetDriver {
     const ch = new BroadcastChannel("oligarh-net");
     const room = rid();
     const seen = new Map<string, number>();
-    const t: Transport = {
-      onData: noop, onPeer: noop,
-      send: (peer, d) => ch.postMessage({ k: "data", room, from: "host", to: peer, d } satisfies TabMsg),
-      close: () => { clearInterval(timer); ch.postMessage({ k: "bye", room, from: "host" } satisfies TabMsg); ch.close(); },
-    };
+    const t = makeTransport(
+      (peer, d) => ch.postMessage({ k: "data", room, from: "host", to: peer, d } satisfies TabMsg),
+      () => { clearInterval(timer); ch.postMessage({ k: "bye", room, from: "host" } satisfies TabMsg); ch.close(); },
+    );
     ch.onmessage = (e: MessageEvent<TabMsg>) => {
       const m = e.data;
       if (m.k === "ping") ch.postMessage({ k: "table", room, name: tableName } satisfies TabMsg);
@@ -77,11 +86,10 @@ export class TabsDriver implements NetDriver {
     const me = rid();
     let lastHost = Date.now();
     return new Promise((resolve, reject) => {
-      const t: Transport = {
-        onData: noop, onPeer: noop,
-        send: (_peer, d) => ch.postMessage({ k: "data", room, from: me, to: "host", d } satisfies TabMsg),
-        close: () => { clearInterval(hb); ch.postMessage({ k: "bye", room, from: me } satisfies TabMsg); ch.close(); },
-      };
+      const t = makeTransport(
+        (_peer, d) => ch.postMessage({ k: "data", room, from: me, to: "host", d } satisfies TabMsg),
+        () => { clearInterval(hb); ch.postMessage({ k: "bye", room, from: me } satisfies TabMsg); ch.close(); },
+      );
       const fail = setTimeout(() => reject(new Error("Стол не отвечает")), 5000);
       ch.onmessage = (e: MessageEvent<TabMsg>) => {
         const m = e.data;
@@ -129,11 +137,10 @@ export class BluetoothDriver implements NetDriver {
   constructor(private bt: BtPlugin) {}
 
   private async wire(): Promise<Transport> {
-    const t: Transport = {
-      onData: noop, onPeer: noop,
-      send: (peer, data) => { void this.bt.send({ peer, data }); },
-      close: () => { void this.bt.stop(); for (const l of this.listeners) void l.remove(); this.listeners = []; },
-    };
+    const t = makeTransport(
+      (peer, data) => { void this.bt.send({ peer, data }); },
+      () => { void this.bt.stop(); for (const l of this.listeners) void l.remove(); this.listeners = []; },
+    );
     this.listeners.push(await this.bt.addListener("peer", (e) => t.onPeer(e.peer, e.up)));
     this.listeners.push(await this.bt.addListener("data", (e) => t.onData(e.peer, e.data)));
     return t;
@@ -158,7 +165,9 @@ export class BluetoothDriver implements NetDriver {
   }
 }
 
+let driver: NetDriver | null = null;
+/** Один транспорт на всё приложение: Bluetooth в Android, вкладки — в браузере. */
 export function pickDriver(): NetDriver {
-  const bt = nativeBluetooth();
-  return bt ? new BluetoothDriver(bt) : new TabsDriver();
+  if (!driver) { const bt = nativeBluetooth(); driver = bt ? new BluetoothDriver(bt) : new TabsDriver(); }
+  return driver;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GameConfig, GameState, act, adCost, buildCost, canTakeover, capital, companyValue, fame, handValue, lotPrice, luxCost, newGame, rentFor } from "../src/engine/engine";
+import { GameConfig, GameState, act, adCost, demolishAskList, buildCost, canTakeover, capital, companyValue, fame, handValue, lotPrice, luxCost, newGame, rentFor } from "../src/engine/engine";
 import { playOut } from "../src/engine/runner";
 
 const players = (n: number, bot = false): GameConfig["players"] =>
@@ -158,9 +158,11 @@ describe("аукцион и слияние", () => {
     expect(s.players[1].money).toBe(2300);
   });
 
-  it("быстрая партия раздаёт по клетке каждому", () => {
-    const s = newGame({ players: players(4), mode: "solo", length: "quick", seed: 5 });
+  it("стартовые предприятия — только если включены в настройках", () => {
+    const s = newGame({ players: players(4), mode: "solo", length: "quick", seed: 5, startCompanies: true });
     for (const p of s.players) expect(Object.values(s.props).filter((q) => q.owner === p.id).length).toBe(1);
+    const t = newGame({ players: players(4), mode: "solo", length: "quick", seed: 5 });
+    expect(Object.values(t.props).filter((q) => q.owner !== null).length).toBe(0);
   });
 });
 
@@ -487,5 +489,41 @@ describe("вклад, роскошь, реклама", () => {
     expect(s.players[0].money).toBe(1500 - cost + Math.round(rent0 * 0.35));
     for (let k = 0; k < 4; k++) pass(s);
     expect(s.props[39].ad).toBeNull();
+  });
+});
+
+describe("прокачка на месте и снос с акционерами", () => {
+  it("встал на свою клетку — прокачка на 10% дешевле, после броска скидка пропадает", () => {
+    const s = game(2);
+    s.props[39].owner = 0;
+    const full = buildCost(s, 0, 39, 1);
+    s.players[0].pos = 36;
+    roll(s, 1, 2);
+    expect(s.players[0].pos).toBe(39);
+    expect(buildCost(s, 0, 39, 1)).toBe(Math.round(full * 0.9));
+    act(s, 0, { t: "endTurn" });
+    expect(buildCost(s, 0, 39, 1)).toBe(full);
+  });
+
+  it("снос: возврат делится между акционерами по долям", () => {
+    const s = game(3);
+    const p = s.props[39];
+    p.owner = 0; p.level = 1; p.branch = "rent"; p.invested = 400; p.holders = { 1: 2, 2: 1 };
+    expect(demolishAskList(s, 39)).toEqual([]); // у владельца 70% — спрашивать не нужно
+    expect(act(s, 0, { t: "demolish", cell: 39 }).ok).toBe(true);
+    expect(s.players[0].money).toBe(1500 + 140);
+    expect(s.players[1].money).toBe(1500 + 40);
+    expect(s.players[2].money).toBe(1500 + 20);
+  });
+
+  it("снос без большинства: нужно согласие акционеров, больше 50% голосов", () => {
+    const s = game(3);
+    const p = s.props[39];
+    p.owner = 0; p.level = 2; p.branch = "rent"; p.invested = 600; p.holders = { 1: 3, 2: 2 }; // у владельца 50%
+    expect(demolishAskList(s, 39)).toEqual([1, 2]);
+    expect(act(s, 0, { t: "demolish", cell: 39 }).ok).toBe(false);
+    expect(act(s, 0, { t: "demolish", cell: 39, approve: [2] }).ok).toBe(true);
+    expect(p.level).toBe(0);
+    expect(s.players[1].money).toBe(1500 + 90);
   });
 });

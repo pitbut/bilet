@@ -26,6 +26,8 @@ export interface GameConfig {
   quickRounds?: number;
   classicRounds?: number;
   startMoney?: number;
+  /** Раздать каждому по случайному предприятию на старте (ускоряет партию). */
+  startCompanies?: boolean;
 }
 
 export interface Player extends PlayerConfig {
@@ -160,6 +162,8 @@ export interface GameState {
   nextOfferId: number;
   nextLoanId: number;
   nextLuxId: number;
+  /** Своя клетка, на которую игрок встал в этот ход: прокачка «на месте» дешевле. */
+  landedOwn?: number | null;
   /** Только для тестов: заранее заданные броски. */
   forcedDice?: [number, number][];
 }
@@ -193,7 +197,7 @@ export type Action =
   | { t: "buyCoop"; partners: CoopPart[] }
   | { t: "takeLoan"; cell: number; kind: "company" | "shares"; amount: number }
   | { t: "repayLoan"; id: number }
-  | { t: "demolish"; cell: number }
+  | { t: "demolish"; cell: number; approve?: number[] }
   | { t: "deposit"; amount: number }
   | { t: "withdraw"; amount: number }
   | { t: "buyLux"; kind: LuxKind }
@@ -223,6 +227,10 @@ export const BRANCH_MULT: Record<BranchId, number[]> = { rent: [4, 10, 20], inco
 export const INCOME_SHARE = [0.04, 0.08, 0.15];
 export const TRANSPORT_RENT = [25, 50, 100, 200];
 export const MAX_CONSTRUCTIONS = 3;
+/** Прокачка своей клетки, на которую встал в этот ход, — на 10% дешевле. */
+export const ONSITE_DISCOUNT = 0.1;
+/** Снос при акционерах: нужно больше половины голосов (6 лотов из 10). */
+export const MAJORITY_LOTS = 6;
 /** Отработка: аренда на 10% меньше, но пропуск следующего хода. */
 export const WORKOFF_DISCOUNT = 0.1;
 export const RED_NUMBERS = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
@@ -267,7 +275,7 @@ export function newGame(cfg: GameConfig): GameState {
     props, current: 0, round: 1, phase: "roll", pending: null, casinoBets: 0, lastDice: [1, 1],
     jackpot: 0, market: null, offers: [], nextOfferId: 1, nextLoanId: 1, nextLuxId: 1, rng: cfg.seed ?? Math.floor(Math.random() * 2 ** 31), events: [], winner: null, turnCounter: 0,
   };
-  if (cfg.length === "quick") { // ускоритель быстрой партии: по случайной клетке каждому
+  if (cfg.startCompanies) { // по желанию: по случайной клетке каждому — партия быстрее разгоняется
     const free = BOARD.filter((c) => c.kind === "business").map((c) => c.index);
     for (const pl of s.players) {
       const idx = free.splice(randInt(s, free.length), 1)[0];
@@ -308,6 +316,7 @@ export function buildCost(s: GameState, pid: number, idx: number, level: number)
   if (hasSpecial(s, pid, "forest")) c *= 0.85;
   if (s.market?.buildCost) c *= s.market.buildCost;
   c *= 1 - PUBLIC_BUILD_DISCOUNT * soldLots(s.props[idx]); // деньги инвесторов удешевляют стройку
+  if (s.landedOwn === idx && s.current === pid) c *= 1 - ONSITE_DISCOUNT; // приехал на свой объект — прокачка на месте дешевле
   if (hasBuff(s, pid, "vacation")) c *= 1 - VACATION_BUILD_DISCOUNT; // отдохнул — свежие идеи, жёсткие переговоры с подрядчиками
   return Math.round(c);
 }
@@ -674,6 +683,29 @@ function updateLuxValues(s: GameState) {
   }
 }
 
+// ---------- Снос при акционерах ----------
+
+/** Голоса за снос: доля владельца + боты-акционеры (согласны, пока здание не максимальное) + люди из approve. */
+export function demolishVote(s: GameState, idx: number, approve: number[]): { yes: number; against: number[] } {
+  const p = s.props[idx];
+  let yes = ownerLots(p);
+  const against: number[] = [];
+  if (yes >= MAJORITY_LOTS) return { yes, against };
+  for (const [h, lots] of Object.entries(p.holders)) {
+    const hid = +h;
+    const agree = s.players[hid].bot ? p.level < 3 : approve.includes(hid);
+    if (agree) yes += lots; else against.push(hid);
+  }
+  return { yes, against };
+}
+
+/** Люди-акционеры, которых нужно спросить о сносе (пусто — владелец решает сам). */
+export function demolishAskList(s: GameState, idx: number): number[] {
+  const p = s.props[idx];
+  if (ownerLots(p) >= MAJORITY_LOTS) return [];
+  return Object.keys(p.holders).map(Number).filter((h) => !s.players[h].bot && !s.players[h].bankrupt);
+}
+
 // ---------- Складчина ----------
 
 /** Согласится ли бот войти в долю при покупке клетки. */
@@ -837,6 +869,7 @@ function startTurn(s: GameState) {
   pl.energy = ENERGY_PER_ROUND;
   pl.doubles = 0;
   s.pending = null;
+  s.landedOwn = null;
   s.casinoBets = 0;
   emit(s, { type: "turn", player: pl.id, round: s.round });
   serviceLoans(s, pl.id);
@@ -988,6 +1021,7 @@ function land(s: GameState, pid: number, diceSum: number) {
       give(s, pid, LAND_START, "остановка на Старте");
       break;
     case "business": case "transport": case "energy":
+      if (p.owner === pid) s.landedOwn = c.index;
       if (p.owner === null) {
         s.pending = { kind: "buy", cell: c.index };
         s.phase = "decide";
@@ -1299,6 +1333,7 @@ export function act(s: GameState, pid: number, a: Action): Result {
       if (s.phase !== "roll") return { ok: false, error: "Сейчас нельзя бросать" };
       const [d1, d2] = s.forcedDice?.shift() ?? [1 + randInt(s, 6), 1 + randInt(s, 6)];
       s.lastDice = [d1, d2];
+      s.landedOwn = null;
       emit(s, { type: "dice", player: pid, a: d1, b: d2 });
       resolveTotes(s, d1 + d2);
       if (d1 === d2) {
@@ -1420,10 +1455,13 @@ export function act(s: GameState, pid: number, a: Action): Result {
       if (a.t === "demolish") {
         const p = s.props[a.cell];
         if (!p || p.owner !== pid || p.level === 0 || p.construction) return { ok: false, error: "Сносить нечего" };
+        const vote = demolishVote(s, a.cell, a.approve ?? []);
+        if (vote.yes < MAJORITY_LOTS) return { ok: false, error: `Снос не одобрен: «за» ${vote.yes * 10}%, нужно больше 50%. Против: ${vote.against.map((x) => s.players[x].name).join(", ")}` };
         const refund = Math.round(p.invested / 2);
         give(s, pid, refund, `снос построек «${cell(a.cell).name}»`);
+        shareOut(s, a.cell, refund, "снос"); // акционерам — их доля возврата
         Object.assign(p, { level: 0, branch: null, invested: 0, fastBonus: false });
-        log(s, `${pl.name} сносит постройки в «${cell(a.cell).name}» (+${refund}) — можно выбрать другую ветку`);
+        log(s, `${pl.name} сносит постройки в «${cell(a.cell).name}» (возврат ${refund}${soldLots(p) ? " — поделён по долям" : ""}) — можно строить заново`);
         return { ok: true };
       }
       const lim = loanLimit(s, pid, a.cell, a.kind);

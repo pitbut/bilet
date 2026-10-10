@@ -241,3 +241,6 @@ button.ghostlight { background: rgba(255, 255, 255, 0.08); color: #f3efe6; borde
 button.tablebtn { background: #e8c15a; color: #222; border-color: #e8c15a; font-weight: 700; }
 .setup .small { font-size: 13px; }
 .lux-line { color: #b8860b; font-weight: 600; margin-top: 2px; }
+.savecard { background: rgba(255,255,255,.07); border: 1px solid #e8c15a; color: #f3f3f3; border-radius: 12px; padding: 12px; margin: 8px 0 14px; display: grid; gap: 6px; }
+.savecard .netbtns { margin-top: 4px; }
+.item.focus { border-color: #e8c15a; box-shadow: 0 0 0 2px #e8c15a55; }
