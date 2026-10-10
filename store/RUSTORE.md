@@ -6,7 +6,7 @@
 |---|---|---|
 | `Oligarh-1.0.0.aab` (или `Oligarh-1.0.0.apk`) | собран в `prototype/android/app/build/outputs/…/release/` | сама игра; RuStore принимает и AAB, и APK |
 | `assets/brand/icon-512.png` | в репозитории | иконка карточки, 512×512 |
-| `store/screenshots/*.png` | в репозитории | скриншоты 1080×1920 (нужно от 2 до 10) |
+| `store/phone/*.jpg` и `store/tablet/*.jpg` | в репозитории | скриншоты: телефон 1080×1920 (9:16), планшет 1920×1080 (16:9), минимум 3 в каждом |
 | `site/` | выложить на свой сайт | `app-ads.txt` для Яндекса, политика конфиденциальности |
 
 **Ключ подписи** (`oligarh-release.jks` + `keystore.properties`) хранится только у вас. Без него
