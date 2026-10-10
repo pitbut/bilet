@@ -16,6 +16,12 @@ const roll = (s: GameState, a: number, b: number) => {
   return act(s, s.current, { t: "roll" });
 };
 
+/** Стройка там, где стоит игрок (строить можно только на своей клетке хода). */
+const buildAt = (s: GameState, cell: number, extra: Partial<{ branch: "rent" | "income" | "special"; rush: boolean; insure: boolean }> = {}) => {
+  s.landedOwn = cell;
+  return act(s, s.current, { t: "build", cell, ...extra });
+};
+
 /** Доводит ход до конца без покупок и переходит к следующему игроку. */
 const pass = (s: GameState) => {
   if (s.phase === "decide") act(s, s.current, s.pending!.kind === "buy" ? { t: "decline" } : { t: "payRent" });
@@ -73,7 +79,7 @@ describe("стройка на время", () => {
 
   it("уровень 1 стоит 50% цены и строится за раунд чужих ходов", () => {
     const s = withOil();
-    expect(act(s, 0, { t: "build", cell: 31, branch: "rent" }).ok).toBe(true);
+    expect(buildAt(s, 31, { branch: "rent" }).ok).toBe(true);
     expect(s.players[0].money).toBe(1350);
     expect(s.props[31].construction?.target).toBe(1);
     expect(rentFor(s, 31)).toBe(Math.round(26 * 2 * 0.5)); // монополия ×2, во время стройки — 50%
@@ -89,7 +95,7 @@ describe("стройка на время", () => {
 
   it("тапы во время чужого хода ускоряют стройку и дают бонус «Успел!»", () => {
     const s = withOil();
-    act(s, 0, { t: "build", cell: 31, branch: "rent" });
+    buildAt(s, 31, { branch: "rent" });
     expect(act(s, 0, { t: "tap", cell: 31 }).ok).toBe(false); // свой ход
     pass(s);
     expect(act(s, 0, { t: "tap", cell: 31, n: 60 }).ok).toBe(true);
@@ -106,16 +112,16 @@ describe("стройка на время", () => {
     s.props[31].owner = 0;
     s.props[31].level = 1;
     s.props[31].branch = "rent";
-    expect(act(s, 0, { t: "build", cell: 31 }).error).toMatch(/2 клетки/);
+    expect(buildAt(s, 31).error).toMatch(/2 клетки/);
     s.props[32].owner = 0;
     s.props[31].level = 2;
-    expect(act(s, 0, { t: "build", cell: 31 }).error).toMatch(/монополия/);
+    expect(buildAt(s, 31).error).toMatch(/монополия/);
   });
 
   it("на одном телефоне тапов нет", () => {
     const s = game(3, { mode: "hotseat" });
     s.props[31].owner = 0;
-    act(s, 0, { t: "build", cell: 31, branch: "income" });
+    buildAt(s, 31, { branch: "income" });
     pass(s);
     expect(act(s, 0, { t: "tap", cell: 31 }).ok).toBe(false);
   });
@@ -395,19 +401,34 @@ describe("складчина, кредиты, снос", () => {
     expect(r.ok).toBe(false);
   });
 
-  it("кредит под залог компании: деньги сразу, проценты каждый ход, просрочка — банк забирает", () => {
+  it("кредит под залог компании: проценты каждый ход, просрочка — банк продаёт компанию с аукциона, остаток должнику", () => {
     const s = game(2);
+    s.players[1].bot = true;
     s.props[39].owner = 0;
-    const lim = act(s, 0, { t: "takeLoan", cell: 39, kind: "company", amount: 10000 });
-    expect(lim.ok).toBe(false);
+    expect(act(s, 0, { t: "takeLoan", cell: 39, kind: "company", amount: 10000 }).ok).toBe(false);
     expect(act(s, 0, { t: "takeLoan", cell: 39, kind: "company", amount: 200 }).ok).toBe(true);
     expect(s.players[0].money).toBe(1700);
     pass(s); pass(s);
     expect(s.players[0].money).toBe(1700 - 10); // 5% за ход
     s.players[0].loans[0].due = 0;
-    pass(s); pass(s);
-    expect(s.props[39].owner).toBeNull();
+    const before = s.players[0].money;
+    pass(s); pass(s); // бот покупает залог на аукционе банка
+    expect(s.props[39].owner).toBe(1);
     expect(s.players[0].loans.length).toBe(0);
+    expect(s.players[0].money).toBeGreaterThan(before); // выручка выше долга — остаток вернулся должнику
+    expect(s.phase).toBe("roll");
+  });
+
+  it("акции в залоге банк продаёт кусками по 10%, пока не покроет долг", () => {
+    const s = game(3);
+    s.players[1].bot = true; s.players[2].bot = true;
+    s.props[39].owner = 2; s.props[39].holders = { 0: 3 };
+    expect(act(s, 0, { t: "takeLoan", cell: 39, kind: "shares", amount: 30 }).ok).toBe(true);
+    s.players[0].loans[0].due = 0;
+    pass(s); pass(s); pass(s);
+    expect(s.players[0].loans.length).toBe(0);
+    expect(s.props[39].holders[0] ?? 0).toBeLessThan(3);
+    expect(s.props[39].holders[0] ?? 0).toBeGreaterThan(0); // долг маленький — часть акций осталась
   });
 
   it("снос построек возвращает половину вложений и даёт выбрать другую ветку", () => {
@@ -416,7 +437,7 @@ describe("складчина, кредиты, снос", () => {
     expect(act(s, 0, { t: "demolish", cell: 39 }).ok).toBe(true);
     expect(s.players[0].money).toBe(1600);
     expect(s.props[39].branch).toBeNull();
-    expect(act(s, 0, { t: "build", cell: 39, branch: "income" }).ok).toBe(true);
+    expect(buildAt(s, 39, { branch: "income" }).ok).toBe(true);
   });
 });
 
@@ -493,16 +514,38 @@ describe("вклад, роскошь, реклама", () => {
 });
 
 describe("прокачка на месте и снос с акционерами", () => {
-  it("встал на свою клетку — прокачка на 10% дешевле, после броска скидка пропадает", () => {
+  it("строить можно только на клетке, где стоишь, и один раз за ход", () => {
     const s = game(2);
-    s.props[39].owner = 0;
-    const full = buildCost(s, 0, 39, 1);
+    s.props[39].owner = 0; s.props[37].owner = 0;
+    expect(act(s, 0, { t: "build", cell: 39, branch: "rent" }).error).toMatch(/где стоите/);
     s.players[0].pos = 36;
     roll(s, 1, 2);
     expect(s.players[0].pos).toBe(39);
-    expect(buildCost(s, 0, 39, 1)).toBe(Math.round(full * 0.9));
-    act(s, 0, { t: "endTurn" });
-    expect(buildCost(s, 0, 39, 1)).toBe(full);
+    expect(act(s, 0, { t: "build", cell: 37, branch: "rent" }).error).toMatch(/где стоите/);
+    expect(act(s, 0, { t: "build", cell: 39, branch: "rent" }).ok).toBe(true);
+    s.landedOwn = 37;
+    expect(act(s, 0, { t: "build", cell: 37, branch: "rent" }).error).toMatch(/один раз/);
+  });
+
+  it("купил клетку — можно сразу строить на ней", () => {
+    const s = game(2);
+    s.players[0].pos = 36;
+    roll(s, 1, 2);
+    expect(act(s, 0, { t: "buy" }).ok).toBe(true);
+    expect(act(s, 0, { t: "build", cell: 39, branch: "income" }).ok).toBe(true);
+  });
+
+  it("не хватает на покупку — можно снять со вклада и взять кредит, не уходя с карточки", () => {
+    const s = game(2);
+    s.props[37].owner = 0;
+    act(s, 0, { t: "deposit", amount: 1400 });
+    s.players[0].pos = 36;
+    roll(s, 1, 2);
+    expect(s.phase).toBe("decide");
+    expect(act(s, 0, { t: "withdraw", amount: 200 }).ok).toBe(true);
+    expect(act(s, 0, { t: "takeLoan", cell: 37, kind: "company", amount: 100 }).ok).toBe(true);
+    expect(act(s, 0, { t: "mortgage", cell: 37 }).ok).toBe(false); // компания уже под кредитом
+    expect(act(s, 0, { t: "buy" }).ok).toBe(true);
   });
 
   it("снос: возврат делится между акционерами по долям", () => {
