@@ -277,3 +277,7 @@ button.tablebtn { background: #e8c15a; color: #222; border-color: #e8c15a; font-
   .subs { bottom: 76px; font-size: 14px; padding: 8px 12px; width: min(560px, calc(100% - 120px)); }
   .videobtns { bottom: 10px; }
 }
+.adbtn { width: 100%; background: linear-gradient(90deg, #ffcc00, #ffb300); color: #222; font-weight: 800; border: 0; margin: 4px 0 8px; }
+.adstub { position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,.85); display: flex; align-items: center; justify-content: center; color: #fff; }
+.adstub > div { background: #1d2a33; border-radius: 16px; padding: 22px; min-width: 260px; display: grid; gap: 10px; text-align: center; }
+.adstub .adcount { font: 800 44px system-ui; color: #ffcc00; }

@@ -5,7 +5,7 @@ import { BOARD, BRANCH_EFFECTS, BranchId, INDUSTRIES } from "../engine/board";
 import {
   Action, GameConfig, GameEvent, GameState, Result, act, active, buildCost, canBuild, canLounge, canTakeover, capital, companyValue, drainEvents, freeLots,
   INCOME_SHARE, PUBLIC_PROTECT_LOTS, coopAnswer, loanLimit, WORKOFF_DISCOUNT, lotPrice, newGame, ownerLots, rentFor, soldLots,
-  AD, AdKind, DEPOSIT_RATE, bankSaleValue, demolishAskList, EXPERIENCES, ExpKind, FAME_RENT, LUX, LuxKind, LUX_TAX, EXP_TAX, STASH_MAX, adCost, expCost, fame, luxCost, luxPayback,
+  AD, AdKind, AD_REWARD, adRewardWait, DEPOSIT_RATE, bankSaleValue, demolishAskList, EXPERIENCES, ExpKind, FAME_RENT, LUX, LuxKind, LUX_TAX, EXP_TAX, STASH_MAX, adCost, expCost, fame, luxCost, luxPayback,
   loanRate, loanShare, luxuryTaxCell,
 } from "../engine/engine";
 import { botStep } from "../engine/runner";
@@ -15,6 +15,7 @@ import { pickDriver } from "../net/transport";
 import { clearSave, saveGame } from "./save";
 import { CALLERS, showCall } from "./call";
 import { APP_VERSION } from "../version";
+import { initAds, showInterstitial, showRewarded } from "./ads";
 
 export type Speed = "normal" | "fast" | "instant";
 const SPEED = { normal: { hop: 0.42, bot: 800 }, fast: { hop: 0.2, bot: 350 }, instant: { hop: 0, bot: 60 } };
@@ -106,6 +107,7 @@ export class App {
     root.append(this.ui);
     this.scene.onCellClick = (i) => this.showCell(i);
     (window as unknown as { __oligarh: App }).__oligarh = this; // для отладки и автотестов
+    initAds();
     const measure = () => {
       this.placeCards();
       this.scene.safeTop = this.bar.getBoundingClientRect().bottom + 6;
@@ -1041,6 +1043,8 @@ export class App {
     };
     if (back) need = Math.max(need, pl.deposit);
     const sec: Node[] = [];
+    const adBtn = this.adRewardButton(me, () => { if (back) this.showFinance(0, me, back); else { const p = s.pending; const lack = p?.kind === "buy" ? (BOARD[p.cell].price ?? 0) - s.players[me].money : 0; if (lack > 0) this.showFinance(lack); else { this.closeModal(); this.toast("Денег хватает — тапните по карточке, чтобы купить", "good"); } } });
+    if (adBtn) sec.push(adBtn);
     if (pl.deposit > 0) sec.push(h("div", { class: "item" }, h("b", {}, `На вкладе ${fmt(pl.deposit)}`),
       h("div", { class: "row" }, button(`Снять ${fmt(Math.min(pl.deposit, need))}`, () => run({ t: "withdraw", amount: Math.min(pl.deposit, need) }), "primary"),
         pl.deposit > need ? button(`Снять всё`, () => run({ t: "withdraw", amount: pl.deposit }), "ghost") : "")));
@@ -1055,6 +1059,22 @@ export class App {
     if (back) this.modal.querySelector(".close")!.addEventListener("click", back); // закрыли — снова к ставке, аукцион не зависает
     else this.openModal(h("h2", {}, `Не хватает ${fmt(need)} млн ₽`), h("div", { class: "muted" }, `У вас ${fmt(pl.money)}. Наберите недостающее — и покупайте.`), ...sec);
     this.modal.dataset.view = "finance";
+  }
+
+  /** «📺 Посмотреть рекламу: +100» — по желанию игрока, раз в пару раундов. */
+  private adRewardButton(pid: number, after: () => void): Node | null {
+    if (this.s.players[pid].bot) return null;
+    const wait = adRewardWait(this.s, pid);
+    if (wait) return h("div", { class: "muted tiny" }, `📺 Бонус за рекламу снова будет через ${wait} р.`);
+    return button(`📺 Посмотреть рекламу: +${AD_REWARD} млн`, () => {
+      void showRewarded().then(async (ok) => {
+        if (!ok) { this.toast("Реклама не досмотрена — бонуса нет", "warn"); return; }
+        const r = await this.run(pid, { t: "adReward" });
+        if (r.ok) { sfx.coin(); this.toast(`+${AD_REWARD} млн за рекламу`, "good"); } else this.toast(r.error ?? "Нельзя", "warn");
+        this.render();
+        after();
+      });
+    }, "adbtn");
   }
 
   /** Банк: кредиты под залог своих компаний или акций. */
@@ -1166,6 +1186,7 @@ export class App {
       }
     }
 
+    if (myTurn) { const ad = this.adRewardButton(me, () => this.showExchange()); if (ad) sections.push(ad); }
     sections.push(...this.bankSection(me, myTurn, run));
 
     const market = Object.keys(s.props).map(Number).filter((i) => s.props[i].listings.some((l) => l.seller !== me));
@@ -1383,7 +1404,7 @@ export class App {
     const ranking = [...s.players].sort((a, b) => capital(s, b.id) - capital(s, a.id));
     this.openModal(h("h2", {}, `Победа: ${s.players[s.winner!].name}!`),
       h("ol", {}, ...ranking.map((p) => h("li", {}, `${p.name}${p.bankrupt ? " (банкрот)" : ""} — капитал ${fmt(capital(s, p.id))} млн ₽`))),
-      h("div", { class: "row" }, button("Новая игра", () => { this.closeModal(); this.onExit(); }, "primary")));
+      h("div", { class: "row" }, button("Новая игра", () => { this.closeModal(); void showInterstitial().then(() => this.onExit()); }, "primary")));
     void active;
   }
 

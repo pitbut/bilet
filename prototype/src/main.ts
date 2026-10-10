@@ -181,7 +181,7 @@ function renderSetup() {
   title.textContent = "ОЛИГАРХ";
   const sub = document.createElement("p");
   sub.className = "muted";
-  sub.textContent = `Прототип · версия ${APP_VERSION}`;
+  sub.textContent = `Российские города · стройки · биржа · версия ${APP_VERSION}`;
   box.append(title, sub);
 
   const savedGame = loadGame();

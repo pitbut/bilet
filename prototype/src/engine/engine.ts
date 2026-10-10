@@ -60,6 +60,8 @@ export interface Player extends PlayerConfig {
   stash: number;
   /** Сообщения от банка и биржи (звонки, которые можно посмотреть позже). */
   inbox?: Message[];
+  /** Раунд, когда последний раз брал бонус за рекламу. */
+  adRound?: number;
 }
 
 export type Caller = "bank" | "exchange";
@@ -225,6 +227,7 @@ export type Action =
   | { t: "payExit" }
   | { t: "rollDouble" }
   | { t: "stay" }
+  | { t: "adReward" }
   | { t: "endTurn" };
 
 export interface Result { ok: boolean; error?: string; info?: string }
@@ -450,6 +453,14 @@ function shareOut(s: GameState, idx: number, amount: number, what: string) {
     give(s, hid, part, `дивиденды «${cell(idx).name}» (${lots * 10}%)`);
   }
   void what;
+}
+
+/** Бонус за просмотр рекламы: раз в несколько раундов. */
+export const AD_REWARD = 100;
+export const AD_REWARD_ROUNDS = 2;
+export function adRewardWait(s: GameState, pid: number): number {
+  const last = s.players[pid].adRound;
+  return last === undefined ? 0 : Math.max(0, last + AD_REWARD_ROUNDS - s.round);
 }
 
 /** Звонок человеку от банка или биржи: сообщение ложится во «Входящие». Ботам не звонят. */
@@ -1430,7 +1441,7 @@ export function act(s: GameState, pid: number, a: Action): Result {
   }
   // на аукционе участник может срочно добыть деньги: снять со вклада, взять кредит, заложить клетку, продать роскошь
   const bidder = s.phase === "auction" && s.pending?.kind === "auction" && s.pending.waiting.includes(pid);
-  const raisingMoney = a.t === "withdraw" || a.t === "takeLoan" || a.t === "mortgage" || a.t === "sellLux";
+  const raisingMoney = a.t === "withdraw" || a.t === "takeLoan" || a.t === "mortgage" || a.t === "sellLux" || a.t === "adReward";
   if (!mine && !(bidder && raisingMoney)) return { ok: false, error: "Сейчас не ваш ход" };
 
   switch (a.t) {
@@ -1788,6 +1799,15 @@ export function act(s: GameState, pid: number, a: Action): Result {
         log(s, `${pl.name} не выбросил дубль`);
         s.phase = "end";
       }
+      return { ok: true };
+    }
+    case "adReward": {
+      if (pl.bot) return { ok: false, error: "Только для людей" };
+      const wait = adRewardWait(s, pid);
+      if (wait) return { ok: false, error: `Следующий бонус — через ${wait} р.` };
+      pl.adRound = s.round;
+      give(s, pid, AD_REWARD, "бонус за рекламу");
+      log(s, `${pl.name} получает бонус ${AD_REWARD} за просмотр рекламы`);
       return { ok: true };
     }
     case "endTurn": {

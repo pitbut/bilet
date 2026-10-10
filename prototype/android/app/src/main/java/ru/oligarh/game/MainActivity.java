@@ -9,6 +9,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(OligarhBluetoothPlugin.class);
+        registerPlugin(YandexAdsPlugin.class);
         super.onCreate(savedInstanceState);
         // во время партии экран не гаснет
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);

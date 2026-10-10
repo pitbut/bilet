@@ -615,3 +615,18 @@ describe("деньги на аукционе", () => {
     expect(s.players[1].money).toBe(1650);
   });
 });
+
+describe("бонус за рекламу", () => {
+  it("+100 за просмотр, не чаще раза в 2 раунда, ботам нельзя", () => {
+    const s = game(2);
+    expect(act(s, 0, { t: "adReward" }).ok).toBe(true);
+    expect(s.players[0].money).toBe(1600);
+    expect(act(s, 0, { t: "adReward" }).error).toMatch(/через 2/);
+    pass(s); pass(s); pass(s); pass(s);
+    expect(s.round).toBe(3);
+    expect(act(s, 0, { t: "adReward" }).ok).toBe(true);
+    s.players[1].bot = true;
+    s.current = 1;
+    expect(act(s, 1, { t: "adReward" }).ok).toBe(false);
+  });
+});
