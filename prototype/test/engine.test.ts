@@ -570,3 +570,32 @@ describe("прокачка на месте и снос с акционерами
     expect(s.players[1].money).toBe(1500 + 90);
   });
 });
+
+describe("звонки банка и биржи", () => {
+  it("предложение человеку — звонок и сообщение во «Входящих»; боту не звонят", () => {
+    const s = game(3);
+    s.players[2].bot = true;
+    s.props[39].owner = 1;
+    s.current = 0;
+    expect(act(s, 0, { t: "bidShares", cell: 39, lots: 1, price: 50 }).ok).toBe(true);
+    const ev = s.events.find((e) => e.type === "call");
+    expect(ev && ev.type === "call" && ev.player).toBe(1);
+    expect(s.players[1].inbox?.length).toBe(1);
+    expect(s.players[1].inbox?.[0].offer).toBe(s.offers[0].id);
+    s.props[37].owner = 2;
+    act(s, 0, { t: "bidShares", cell: 37, lots: 1, price: 50 });
+    expect(s.players[2].inbox ?? []).toEqual([]);
+  });
+
+  it("банк звонит в раунд, когда кредит надо вернуть", () => {
+    const s = game(2);
+    s.props[39].owner = 0;
+    act(s, 0, { t: "takeLoan", cell: 39, kind: "company", amount: 100 });
+    s.players[0].loans[0].due = 2;
+    expect(s.players[0].inbox ?? []).toEqual([]);
+    pass(s); pass(s);
+    expect(s.round).toBe(2);
+    expect(s.players[0].inbox?.some((m) => m.from === "bank")).toBe(true);
+    expect(s.players[0].loans.length).toBe(1); // это только напоминание
+  });
+});

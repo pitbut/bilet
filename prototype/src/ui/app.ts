@@ -13,6 +13,7 @@ import { BoardScene } from "./scene";
 import { ActReply, NetClient, NetHost, NetInfo, migratedTable, nextHostSeat } from "../net/session";
 import { pickDriver } from "../net/transport";
 import { clearSave, saveGame } from "./save";
+import { CALLERS, showCall } from "./call";
 
 export type Speed = "normal" | "fast" | "instant";
 const SPEED = { normal: { hop: 0.42, bot: 800 }, fast: { hop: 0.2, bot: 350 }, instant: { hop: 0, bot: 60 } };
@@ -89,6 +90,11 @@ export class App {
   private applying = false;
   private bidding = false;
   dbgEvent = "";
+  /** Звонки, которые ещё не показаны (по одному за раз). */
+  private callQueue: Extract<GameEvent, { type: "call" }>[] = [];
+  private calling = false;
+  private readMsgs = new Set<number>();
+  private callsOn = (() => { try { return localStorage.getItem("oligarh-calls") !== "0"; } catch { return true; } })();
 
   constructor(private root: HTMLElement, private onExit: () => void) {
     const stage = h("div", { class: "stage" });
@@ -440,6 +446,9 @@ export class App {
           if (mine && this.speed !== "instant" && !this.modalView) await this.scene.closeUp(e.cell, 1.4);
           break;
         }
+        case "call":
+          if (this.isLocal(e.player)) { this.callQueue.push(e); void this.nextCall(); }
+          break;
         case "accident":
           sfx.alert();
           this.toast(`Авария на стройке «${BOARD[e.cell].name}»!`, "warn");
@@ -509,7 +518,10 @@ export class App {
     const lounge = s.cfg.mode !== "hotseat" && s.current !== me.id && !me.bankrupt && s.phase !== "gameover"
       ? button("🎰 Казино", () => this.openCasino(true), `small chipbtn${canLounge(s, me.id) ? " dim" : ""} casbtn`) : "";
     const life = button(`💎 Жизнь${fame(s, me.id) ? ` ★${fame(s, me.id)}` : ""}`, () => this.showLife(), "small chipbtn");
-    this.bar.replaceChildren(chip, others, exch, life, lounge, turn);
+    const unread = this.unread(me.id);
+    const inbox = button(`📨${unread ? ` ${unread}` : ""}`, () => this.showInbox(), `small chipbtn${unread ? " hotbtn" : ""}`);
+    inbox.title = "Входящие от банка и биржи";
+    this.bar.replaceChildren(chip, others, exch, life, inbox, lounge, turn);
   }
 
   private render() {
@@ -928,6 +940,90 @@ export class App {
     });
   }
 
+  // ---------- Звонки и «Входящие» ----------
+
+  private unread(pid: number) {
+    return (this.s.players[pid].inbox ?? []).filter((m) => !m.read && !this.readMsgs.has(m.id)).length;
+  }
+
+  private markRead(pid: number, id: number) {
+    this.readMsgs.add(id);
+    const m = this.s.players[pid].inbox?.find((x) => x.id === id);
+    if (m) m.read = true;
+  }
+
+  /** Кнопки по предложению в звонке и во «Входящих»: только пока оно ещё в силе. */
+  private offerHandlers(pid: number, offer?: number) {
+    if (offer === undefined || !this.s.offers.some((o) => o.id === offer && o.to === pid)) return undefined;
+    return {
+      accept: async () => {
+        const r = await this.run(pid, { t: "acceptOffer", id: offer });
+        if (r.ok) { sfx.buy(); this.renderTopBar(); return null; }
+        sfx.alert();
+        return r.error ?? "Сделка не прошла";
+      },
+      decline: async () => { await this.run(pid, { t: "declineOffer", id: offer }); this.renderTopBar(); },
+    };
+  }
+
+  /** Показывает следующий звонок. Звонят только тому, кто сейчас держит телефон; остальное — во «Входящих». */
+  private async nextCall() {
+    if (this.calling) return;
+    const e = this.callQueue.shift();
+    if (!e) return;
+    const pl = this.s.players[e.player];
+    if (!this.callsOn || e.player !== this.meId) {
+      this.toast(`📨 ${CALLERS[e.from].name} (${e.from === "bank" ? "банк" : "биржа"}) — сообщение${e.player !== this.meId ? ` для ${pl.name}` : ""} во «Входящих»`, "card", 3500);
+      this.renderTopBar();
+      void this.nextCall();
+      return;
+    }
+    this.calling = true;
+    try {
+      const r = await showCall(this.ui, { from: e.from, playerName: pl.name, playerColor: pl.color, text: e.text, offer: this.offerHandlers(e.player, e.offer) });
+      if (r === "answered" || r === "accepted" || r === "rejected") this.markRead(e.player, e.msg);
+      else this.toast("Звонок пропущен — сообщение во «📨 Входящих»", "", 3000);
+      if (r === "accepted") this.toast("Сделка состоялась", "good");
+    } finally {
+      this.calling = false;
+      this.renderTopBar();
+      if (this.modalView === "inbox") this.showInbox();
+    }
+    void this.nextCall();
+  }
+
+  /** «Входящие»: пропущенные и прослушанные звонки, предложения можно принять и здесь. */
+  private showInbox() {
+    const s = this.s, me = this.meId, pl = s.players[me];
+    const msgs = [...(pl.inbox ?? [])].reverse();
+    const items = msgs.map((m) => {
+      const unread = !m.read && !this.readMsgs.has(m.id);
+      const who = CALLERS[m.from];
+      const handlers = this.offerHandlers(me, m.offer);
+      const row = h("div", { class: "row" });
+      if (handlers) {
+        row.append(button("Принять", () => { void handlers.accept().then((err) => { if (err) this.toast(err, "warn"); else this.toast("Сделка состоялась", "good"); this.showInbox(); }); }, "primary"),
+          button("Отказать", () => { void handlers.decline().then(() => this.showInbox()); }));
+      } else if (m.offer !== undefined) row.append(h("span", { class: "muted tiny" }, "Предложение уже неактуально"));
+      row.append(button("▶ Прослушать", () => {
+        this.markRead(me, m.id);
+        this.closeModal();
+        this.calling = true;
+        void showCall(this.ui, { from: m.from, playerName: pl.name, playerColor: pl.color, text: m.text, noRing: true, offer: this.offerHandlers(me, m.offer) })
+          .then(() => { this.calling = false; this.renderTopBar(); void this.nextCall(); });
+      }, "ghost"));
+      return h("div", { class: `item msg${unread ? " unread" : ""}` },
+        h("div", { class: "item-head" }, h("b", {}, `${m.from === "bank" ? "🏦" : "📈"} ${who.name}`), h("span", { class: "muted" }, ` · ${who.org.split(" · ")[0]} · раунд ${m.round}`)),
+        h("div", {}, m.text), row);
+    });
+    for (const m of msgs) this.markRead(me, m.id);
+    this.openModal(h("h2", {}, "📨 Входящие"),
+      h("div", { class: "muted" }, "Звонки банка и биржи. Не ответили или прервали — сообщение остаётся здесь. Звонки можно выключить в меню ☰."),
+      ...(items.length ? items : [h("div", { class: "hint" }, "Сообщений пока нет.")]));
+    this.modal.dataset.view = "inbox";
+    this.renderTopBar();
+  }
+
   /** «Где взять деньги» прямо во время покупки: снять со вклада, кредит, заложить клетку, продать роскошь. */
   private showFinance(need: number) {
     const s = this.s, me = s.current, pl = s.players[me];
@@ -1230,7 +1326,12 @@ export class App {
     const sp = (v: Speed, t: string) => button(t, () => { this.speed = v; this.scene.hopTime = SPEED[v].hop; this.closeModal(); }, this.speed === v ? "primary" : "");
     this.openModal(h("h2", {}, "Меню"),
       h("div", {}, "Скорость анимации"), h("div", { class: "row" }, sp("normal", "Обычная"), sp("fast", "Быстрая"), sp("instant", "Мгновенно")),
-      h("div", { class: "row" }, button(isMuted() ? "🔇 Звук выключен" : "🔊 Звук включён", () => { setMuted(!isMuted()); this.showMenu(); })),
+      h("div", { class: "row" }, button(isMuted() ? "🔇 Звук выключен" : "🔊 Звук включён", () => { setMuted(!isMuted()); this.showMenu(); }),
+        button(this.callsOn ? "📞 Звонки банка и биржи: вкл" : "📨 Звонки выкл — только сообщения", () => {
+          this.callsOn = !this.callsOn;
+          try { localStorage.setItem("oligarh-calls", this.callsOn ? "1" : "0"); } catch { /* приватный режим */ }
+          this.showMenu();
+        })),
       this.net ? "" : h("div", { class: "muted tiny" }, "Партия сохраняется сама после каждого хода. Выйдите — и в меню будет «Продолжить партию»."),
       h("div", { class: "row" }, button("Правила", () => this.showRules()), button(this.net ? "Выйти в меню" : "Сохранить и выйти", () => { if (!this.net && this.s.phase !== "gameover") saveGame(this.s, this.speed); this.closeModal(); this.onExit(); }, "ghost")));
   }
@@ -1257,6 +1358,7 @@ export class App {
         "Не хватает на покупку — «💰 Найти деньги» на карточке: снять со вклада, взять кредит, заложить клетку, продать роскошь.",
         "Не вернули кредит — банк выставляет залог на аукцион: компанию целиком (с постройками), акции — по 10%, пока не покроет долг. Что выручено сверх долга — ваше.",
         "Партия на одном телефоне сохраняется после каждого хода: в меню — «Продолжить партию» или новая игра.",
+        "Банк и биржа звонят: предложения по акциям, напоминание о кредите, продажа залога. Ответьте — сотрудник всё расскажет, можно сразу принять или отказать. Отклонили или прервали — сообщение ждёт во «📨 Входящих».",
         "Игра по Bluetooth: если телефон хозяина стола вышел, хозяином становится следующий телефон, остальные переподключаются сами, а за ушедшего играет бот, пока он не вернётся через «Найти стол».",
         "Вклад в банке: 2% за каждый ваш ход, снять можно в любой свой ход, при нехватке на платёж банк снимет сам.",
         "«💎 Жизнь»: спорткар, особняк, яхта, картины дают статус ★ — каждая звезда +3% к аренде и доходу всех ваших компаний. Налог на роскошь 15%. Вещи стоят на вашем участке в центре поля и считаются в капитале.",

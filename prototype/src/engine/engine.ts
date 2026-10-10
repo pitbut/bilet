@@ -58,7 +58,12 @@ export interface Player extends PlayerConfig {
   buffs: Buff[];
   /** Семейная заначка: подарки семье возвращаются, когда совсем туго. */
   stash: number;
+  /** Сообщения от банка и биржи (звонки, которые можно посмотреть позже). */
+  inbox?: Message[];
 }
+
+export type Caller = "bank" | "exchange";
+export interface Message { id: number; from: Caller; text: string; round: number; offer?: number; read?: boolean }
 
 export type LuxKind = "car" | "mansion" | "yacht" | "painting";
 export type ExpKind = "party" | "vacation" | "gifts";
@@ -143,6 +148,7 @@ export type GameEvent =
   | { type: "log"; text: string }
   | { type: "lux"; player: number; kind: LuxKind | ExpKind; text: string }
   | { type: "ad"; player: number; cell: number; kind: AdKind }
+  | { type: "call"; player: number; from: Caller; text: string; msg: number; offer?: number }
   | { type: "gameover"; winner: number };
 
 export interface GameState {
@@ -165,6 +171,7 @@ export interface GameState {
   nextOfferId: number;
   nextLoanId: number;
   nextLuxId: number;
+  nextMsgId?: number;
   /** Своя клетка, на которой игрок стоит в этот ход: строить можно только на ней. */
   landedOwn?: number | null;
   /** В этот ход уже строили (строить — один раз за ход). */
@@ -445,6 +452,15 @@ function shareOut(s: GameState, idx: number, amount: number, what: string) {
   void what;
 }
 
+/** Звонок человеку от банка или биржи: сообщение ложится во «Входящие». Ботам не звонят. */
+function call(s: GameState, pid: number, from: Caller, text: string, offer?: number) {
+  const pl = s.players[pid];
+  if (!pl || pl.bot || pl.bankrupt) return;
+  const id = s.nextMsgId = (s.nextMsgId ?? 1) + 1;
+  pl.inbox = [...(pl.inbox ?? []), { id, from, text, round: s.round, offer }].slice(-40);
+  emit(s, { type: "call", player: pid, from, text, msg: id, offer });
+}
+
 function stockEvent(s: GameState, text: string, players: number[]) {
   emit(s, { type: "stock", text, players });
   log(s, text);
@@ -551,10 +567,14 @@ function serviceLoans(s: GameState, pid: number) {
         p.listings = p.listings.filter((x) => x.seller !== pid);
         (s.bankQueue ??= []).push({ debtor: pid, kind: l.kind, cell: l.cell, debt: l.amount, lots });
         stockEvent(s, `Кредит ${pl.name} не погашен — банк выставляет на аукцион ${l.kind === "company" ? `«${name}» целиком` : `акции «${name}» по 10%`}`, [pid]);
+        call(s, pid, "bank", `К сожалению, срок кредита ${l.amount} миллионов истёк. Банк выставляет на аукцион ${l.kind === "company" ? `вашу компанию «${name}» целиком` : `ваши акции «${name}» по десять процентов`}. Всё, что выручим сверх долга, вернём вам.`);
       }
       continue;
     }
-    if (s.round === l.due) log(s, `${pl.name}: кредит под «${name}» нужно вернуть в этом раунде, иначе залог уйдёт с аукциона`);
+    if (s.round === l.due) {
+      log(s, `${pl.name}: кредит под «${name}» нужно вернуть в этом раунде, иначе залог уйдёт с аукциона`);
+      call(s, pid, "bank", `Напоминаю: кредит ${l.amount} миллионов под залог ${l.kind === "company" ? `компании «${name}»` : `акций «${name}»`} нужно вернуть в этом раунде. Иначе банк будет вынужден выставить залог на аукцион.`);
+    }
     charge(s, pid, Math.max(1, Math.ceil(l.amount * loanRate(s, pid))), null, `проценты по кредиту «${name}»`);
   }
 }
@@ -1650,6 +1670,7 @@ export function act(s: GameState, pid: number, a: Action): Result {
       }
       s.offers.push(o);
       stockEvent(s, `${pl.name} хочет купить у ${owner.name} ${what}`, [pid, p.owner]);
+      call(s, p.owner, "exchange", `${pl.name} хочет купить у вас ${what.replace(/«/g, "«").replace(" за ", " и предлагает ")} миллионов. Цена на бирже сейчас — ${whole ? Math.round(companyValue(s, a.cell) * ownerLots(p) / LOTS) : lotPrice(s, a.cell) * lots} миллионов. Принять предложение?`, o.id);
       return { ok: true, info: `Предложение отправлено ${owner.name}` };
     }
     case "listShares": case "unlistShares": case "buyShares": case "offerShares": {
@@ -1693,6 +1714,7 @@ export function act(s: GameState, pid: number, a: Action): Result {
       }
       s.offers.push(o);
       stockEvent(s, `${pl.name} предлагает ${to.name} ${lots * 10}% «${name}» за ${price * lots}`, [pid, a.to]);
+      call(s, a.to, "exchange", `${pl.name} предлагает вам ${lots * 10} процентов компании «${name}» за ${price * lots} миллионов. На бирже такая доля стоит ${lotPrice(s, a.cell) * lots}. Аренда компании сейчас ${rentFor(s, a.cell)}, ваша доля дивидендов — ${lots * 10} процентов. Берёте?`, o.id);
       return { ok: true };
     }
     case "overtime": {

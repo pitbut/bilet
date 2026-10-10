@@ -75,5 +75,6 @@ export const sfx = {
   bankrupt: () => tone(400, 1.0, "sawtooth", 0.12, 0, 80),
   turn: () => { tone(740, 0.08, "sine", 0.12); tone(988, 0.14, "sine", 0.12, 0.08); },
   alert: () => { tone(880, 0.1, "square", 0.08); tone(880, 0.1, "square", 0.08, 0.15); },
+  ring: () => { for (let k = 0; k < 2; k++) { tone(880, 0.35, "sine", 0.16, k * 0.45); tone(1320, 0.35, "sine", 0.1, k * 0.45); } },
   stock: () => { tone(600, 0.06, "triangle", 0.12); tone(900, 0.12, "triangle", 0.12, 0.06); },
 };
