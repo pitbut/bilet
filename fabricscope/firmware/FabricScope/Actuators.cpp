@@ -45,11 +45,28 @@ static bool pressureMaxSwitchTripped() {
 // move deliberately heading AWAY from a switch that's still tripped (e.g.
 // right after homing completes, while the zero switch is still pressed)
 // would immediately abort itself on the very first update() tick.
-static bool pressureLimitBlocks(bool clockwise) {
+static ServoStopReason pressureLimitBlocks(bool clockwise) {
 	bool towardZero = (clockwise == gSettings.pressureHomeClockwise);
-	if (towardZero && pressureZeroSwitchTripped()) return true;
-	if (!towardZero && pressureMaxSwitchTripped()) return true;
-	return false;
+	if (towardZero && pressureZeroSwitchTripped()) return ServoStopReason::LimitZero;
+	if (!towardZero && pressureMaxSwitchTripped()) return ServoStopReason::LimitMax;
+	return ServoStopReason::None;
+}
+
+const char *servoStopReasonName(ServoStopReason r) {
+	switch (r) {
+		case ServoStopReason::None:            return "none";
+		case ServoStopReason::Target:          return "target";
+		case ServoStopReason::AlreadyThere:    return "already_there";
+		case ServoStopReason::LimitZero:       return "limit_zero";
+		case ServoStopReason::LimitMax:        return "limit_max";
+		case ServoStopReason::Stall:           return "stall";
+		case ServoStopReason::WrongDirection:  return "wrong_direction";
+		case ServoStopReason::Timeout:         return "timeout";
+		case ServoStopReason::Stopped:         return "stopped";
+		case ServoStopReason::HomeReached:     return "home";
+		case ServoStopReason::HomeWrongSwitch: return "home_wrong_switch";
+	}
+	return "unknown";
 }
 
 void PressureServo::begin() {
@@ -66,73 +83,176 @@ void PressureServo::begin() {
 #endif
 }
 
-void PressureServo::driveAt(bool clockwise) {
+// Speed is the pulse's distance from the (trimmed) stop pulse — clockwise
+// is above it, counter-clockwise below, same sense as SERVO_FULL_CW_US.
+void PressureServo::setSpeed(bool clockwise, uint32_t speedUs) {
+	int us = stopPulseUs() + (clockwise ? (int)speedUs : -(int)speedUs);
+	us = constrain(us, SERVO_FULL_CCW_US, SERVO_FULL_CW_US);
+	sPressureServo.writeMicroseconds(us);
+}
+
+// Powers up and starts spinning. Returns false if stop() was called (from
+// the web task) during the power-up warmup — in that case power is cut
+// again and nothing should be driven.
+bool PressureServo::driveAt(bool clockwise, uint32_t speedUs) {
 	clockwise_ = clockwise;
+	sPressureServo.writeMicroseconds(stopPulseUs());
 	setServoPower(true);
-	sPressureServo.writeMicroseconds(clockwise ? SERVO_FULL_CW_US : SERVO_FULL_CCW_US);
+	if (mode_ == ServoDriveMode::Idle) {
+		setServoPower(false);
+		return false;
+	}
+	setSpeed(clockwise, speedUs);
+	return true;
+}
+
+void PressureServo::post(const Command &cmd) {
+	portENTER_CRITICAL(&mux_);
+	cmd_ = cmd;
+	cmdPending_ = true;
+	portEXIT_CRITICAL(&mux_);
 }
 
 void PressureServo::startTimed(bool clockwise, uint32_t maxDurationMs) {
-	mode_ = ServoDriveMode::Timed;
-	startMs_ = millis();
-	timeoutMs_ = min(maxDurationMs, (uint32_t)SERVO_MANUAL_MAX_DURATION_MS);
-	driveAt(clockwise);
+	post({ServoDriveMode::Timed, clockwise, 0, min(maxDurationMs, (uint32_t)SERVO_MANUAL_MAX_DURATION_MS), nullptr});
 }
 
 void PressureServo::startMoveToEncoderTarget(RackEncoder *encoder, int32_t targetCounts, uint32_t timeoutMs) {
-	encoder_ = encoder;
-	targetCounts_ = targetCounts;
-	int32_t start = encoder->counts();
-	if (targetCounts == start) { mode_ = ServoDriveMode::Idle; return; } // already there
-	mode_ = ServoDriveMode::EncoderTarget;
-	startMs_ = millis();
-	timeoutMs_ = timeoutMs;
-	driveAt(targetCounts > start);
+	post({ServoDriveMode::EncoderTarget, false, targetCounts, timeoutMs, encoder});
 }
 
 void PressureServo::startHoming(RackEncoder *encoder, bool clockwise, uint32_t timeoutMs) {
-	encoder_ = encoder;
-	lastHomeReached_ = false;
-	if (pressureZeroSwitchTripped()) {
-		encoder->zero();
-		lastHomeReached_ = true;
-		mode_ = ServoDriveMode::Idle;
-		return;
-	}
-	mode_ = ServoDriveMode::Homing;
+	post({ServoDriveMode::Homing, clockwise, 0, timeoutMs, encoder});
+}
+
+// Loop task only. Any move already running is replaced by the new one.
+void PressureServo::execute(const Command &cmd) {
+	encoder_ = cmd.encoder;
+	timeoutMs_ = cmd.timeoutMs;
 	startMs_ = millis();
-	timeoutMs_ = timeoutMs;
-	driveAt(clockwise);
+
+	switch (cmd.mode) {
+		case ServoDriveMode::Timed:
+			mode_ = ServoDriveMode::Timed;
+			driveAt(cmd.clockwise, SERVO_FULL_SPEED_US);
+			break;
+
+		case ServoDriveMode::EncoderTarget: {
+			targetCounts_ = cmd.targetCounts;
+			startCounts_ = encoder_->counts();
+			int32_t distance = targetCounts_ - startCounts_;
+			if (abs(distance) <= SERVO_TARGET_TOLERANCE_COUNTS) {
+				finish(ServoStopReason::AlreadyThere);
+				return;
+			}
+			increasing_ = distance > 0;
+			// Counts increase moving AWAY from the zero switch, i.e. opposite
+			// to the homing rotation.
+			bool cw = increasing_ ? !gSettings.pressureHomeClockwise : gSettings.pressureHomeClockwise;
+			ServoStopReason blocked = pressureLimitBlocks(cw);
+			if (blocked != ServoStopReason::None) {
+				finish(blocked);
+				return;
+			}
+			mode_ = ServoDriveMode::EncoderTarget;
+			if (!driveAt(cw, SERVO_FULL_SPEED_US)) return;
+			// Stall clock starts after the power-up warmup, not before it.
+			lastProgressCounts_ = encoder_->counts();
+			lastProgressMs_ = millis();
+			break;
+		}
+
+		case ServoDriveMode::Homing:
+			lastHomeReached_ = false;
+			encoderFlipped_ = false;
+			if (pressureZeroSwitchTripped()) {
+				encoder_->zero();
+				lastHomeReached_ = true;
+				finish(ServoStopReason::HomeReached);
+				return;
+			}
+			startCounts_ = encoder_->counts();
+			mode_ = ServoDriveMode::Homing;
+			driveAt(cmd.clockwise, SERVO_FULL_SPEED_US);
+			break;
+
+		default:
+			break;
+	}
 }
 
 void PressureServo::update() {
+	if (cmdPending_) {
+		Command cmd;
+		portENTER_CRITICAL(&mux_);
+		cmd = cmd_;
+		cmdPending_ = false;
+		portEXIT_CRITICAL(&mux_);
+		execute(cmd);
+	}
+
 	if (mode_ == ServoDriveMode::Idle) return;
 	bool timedOut = millis() - startMs_ > timeoutMs_;
 
 	switch (mode_) {
-		case ServoDriveMode::Timed:
-			if (pressureLimitBlocks(clockwise_) || timedOut) stop();
+		case ServoDriveMode::Timed: {
+			ServoStopReason blocked = pressureLimitBlocks(clockwise_);
+			if (blocked != ServoStopReason::None) finish(blocked);
+			else if (timedOut) finish(ServoStopReason::Timeout);
 			break;
+		}
 
 		case ServoDriveMode::EncoderTarget: {
 			int32_t now = encoder_->counts();
-			bool reached = clockwise_ ? (now >= targetCounts_) : (now <= targetCounts_);
-			if (reached || pressureLimitBlocks(clockwise_) || timedOut) stop();
+			int32_t remaining = increasing_ ? (targetCounts_ - now) : (now - targetCounts_);
+			int32_t progress = increasing_ ? (now - startCounts_) : (startCounts_ - now);
+			ServoStopReason blocked = pressureLimitBlocks(clockwise_);
+
+			if (abs(now - lastProgressCounts_) >= SERVO_STALL_MIN_COUNTS) {
+				lastProgressCounts_ = now;
+				lastProgressMs_ = millis();
+			}
+
+			if (remaining <= SERVO_TARGET_TOLERANCE_COUNTS) finish(ServoStopReason::Target);
+			else if (blocked != ServoStopReason::None) finish(blocked);
+			else if (progress < -SERVO_WRONG_DIR_COUNTS) finish(ServoStopReason::WrongDirection);
+			else if (millis() - lastProgressMs_ > SERVO_STALL_TIMEOUT_MS) finish(ServoStopReason::Stall);
+			else if (timedOut) finish(ServoStopReason::Timeout);
+			else {
+				// Linear slow-down inside the slow zone, so the servo's own
+				// coasting doesn't carry the rack past the target.
+				uint32_t speed = SERVO_FULL_SPEED_US;
+				if (remaining < SERVO_SLOW_ZONE_COUNTS) {
+					speed = SERVO_MIN_SPEED_US +
+						(uint32_t)((SERVO_FULL_SPEED_US - SERVO_MIN_SPEED_US) * (int64_t)remaining / SERVO_SLOW_ZONE_COUNTS);
+				}
+				setSpeed(clockwise_, speed);
+			}
 			break;
 		}
 
 		case ServoDriveMode::Homing:
 			if (pressureZeroSwitchTripped()) {
+				// Travelling towards zero must make the counts go DOWN. If they
+				// clearly went up instead, the encoder is wired/mounted the
+				// other way round — fix the sign once, here, where the
+				// direction of travel is known for certain.
+				int32_t delta = encoder_->counts() - startCounts_;
+				if (delta > SERVO_WRONG_DIR_COUNTS) {
+					gSettings.encoderReversed = !gSettings.encoderReversed;
+					gSettings.save();
+					encoderFlipped_ = true;
+				}
 				encoder_->zero();
 				lastHomeReached_ = true;
-				stop();
+				finish(ServoStopReason::HomeReached);
 			} else if (pressureMaxSwitchTripped()) {
 				// Hit the wrong switch — pressureHomeClockwise is probably backwards.
 				lastHomeReached_ = false;
-				stop();
+				finish(ServoStopReason::HomeWrongSwitch);
 			} else if (timedOut) {
 				lastHomeReached_ = false;
-				stop();
+				finish(ServoStopReason::Timeout);
 			}
 			break;
 
@@ -141,10 +261,26 @@ void PressureServo::update() {
 	}
 }
 
-void PressureServo::stop() {
+void PressureServo::finish(ServoStopReason reason) {
 	mode_ = ServoDriveMode::Idle;
 	sPressureServo.writeMicroseconds(stopPulseUs());
 	setServoPower(false);
+	lastStop_ = reason;
+}
+
+void PressureServo::stop() {
+	portENTER_CRITICAL(&mux_);
+	bool wasPending = cmdPending_;
+	cmdPending_ = false;
+	portEXIT_CRITICAL(&mux_);
+	if (wasPending || mode_ != ServoDriveMode::Idle) {
+		finish(ServoStopReason::Stopped);
+	} else {
+		// Already idle: re-apply the stop pulse / cut power (the trim test
+		// relies on this) but keep the real reason the last move ended.
+		sPressureServo.writeMicroseconds(stopPulseUs());
+		setServoPower(false);
+	}
 }
 
 bool PressureServo::zeroSwitchTripped() const { return pressureZeroSwitchTripped(); }

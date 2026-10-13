@@ -19,6 +19,7 @@ void Settings::load() {
 	encoderCountsPerMm     = prefs.getFloat("encCountsMm", encoderCountsPerMm);
 	pressureStepMm         = prefs.getFloat("pressStepMm", pressureStepMm);
 	pressureHomeClockwise  = prefs.getBool("pressHomeCw", pressureHomeClockwise);
+	encoderReversed        = prefs.getBool("encReversed", encoderReversed);
 	servoStopTrimUs        = (int16_t)prefs.getShort("servoTrimUs", servoStopTrimUs);
 	springStiffnessKgfMm   = prefs.getFloat("springKgfMm", springStiffnessKgfMm);
 	preloadKgf             = prefs.getFloat("preloadKgf", preloadKgf);
@@ -39,6 +40,7 @@ void Settings::save() const {
 	prefs.putFloat("encCountsMm", encoderCountsPerMm);
 	prefs.putFloat("pressStepMm", pressureStepMm);
 	prefs.putBool("pressHomeCw", pressureHomeClockwise);
+	prefs.putBool("encReversed", encoderReversed);
 	prefs.putShort("servoTrimUs", servoStopTrimUs);
 	prefs.putFloat("springKgfMm", springStiffnessKgfMm);
 	prefs.putFloat("preloadKgf", preloadKgf);
@@ -58,6 +60,7 @@ void Settings::toJson(String &out) const {
 	doc["encoderCountsPerMm"] = encoderCountsPerMm;
 	doc["pressureStepMm"] = pressureStepMm;
 	doc["pressureHomeClockwise"] = pressureHomeClockwise;
+	doc["encoderReversed"] = encoderReversed;
 	doc["servoStopTrimUs"] = servoStopTrimUs;
 	doc["springStiffnessKgfMm"] = springStiffnessKgfMm;
 	doc["preloadKgf"] = preloadKgf;
@@ -93,6 +96,8 @@ bool Settings::fromJson(const String &json) {
 		pressureStepMm = doc["pressureStepMm"].as<float>();
 	if (doc["pressureHomeClockwise"].is<bool>())
 		pressureHomeClockwise = doc["pressureHomeClockwise"].as<bool>();
+	if (doc["encoderReversed"].is<bool>())
+		encoderReversed = doc["encoderReversed"].as<bool>();
 	if (doc["servoStopTrimUs"].is<int16_t>())
 		servoStopTrimUs = doc["servoStopTrimUs"].as<int16_t>();
 	if (doc["springStiffnessKgfMm"].is<float>())

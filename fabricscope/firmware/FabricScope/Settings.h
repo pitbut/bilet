@@ -40,6 +40,13 @@ struct Settings {
 	// flip this and try again.
 	bool pressureHomeClockwise = true;
 
+	// Sign of the external rack encoder. Convention: counts go UP moving
+	// away from the zero switch (more pressure). If A/B are swapped or the
+	// encoder is mounted mirrored it counts the other way, which used to
+	// make "Переместить" spin away from the target until timeout. Homing
+	// detects that and flips this automatically; it can also be set by hand.
+	bool encoderReversed = false;
+
 	// Fine trim (microseconds) added to the 1500us "stop" pulse. On a servo
 	// converted to continuous rotation by physically removing its position
 	// pot, the pulse width that actually produces zero speed is almost never

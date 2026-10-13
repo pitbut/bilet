@@ -2,6 +2,7 @@
 #include <Wire.h>
 #include <VL53L0X.h>
 #include "Config.h"
+#include "Settings.h"
 
 // VL53L0X, not VL53L1X — different chip, different register map/library.
 // The VL53L0X Arduino library has no per-reading status enum like VL53L1X's
@@ -63,6 +64,9 @@ void RackEncoder::begin() {
 	// unlike the old 34/35 pins.
 	pinMode(PIN_ENCODER_A, INPUT_PULLUP);
 	pinMode(PIN_ENCODER_B, INPUT_PULLUP);
+	// Start from the lines' real state, so the first edge isn't decoded
+	// against a made-up previous state of 00.
+	lastEncoded_ = (digitalRead(PIN_ENCODER_A) << 1) | digitalRead(PIN_ENCODER_B);
 	attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_A), onPinAChange, CHANGE);
 	attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_B), onPinAChange, CHANGE);
 }
@@ -79,7 +83,7 @@ int32_t RackEncoder::counts() const {
 	noInterrupts();
 	int32_t c = count_;
 	interrupts();
-	return c;
+	return gSettings.encoderReversed ? -c : c;
 }
 
 float RackEncoder::millimeters(float countsPerMm) const {

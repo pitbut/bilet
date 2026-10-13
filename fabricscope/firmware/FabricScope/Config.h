@@ -75,15 +75,27 @@
 // operating limit like the old 3-second cap was.
 #define SERVO_MANUAL_MAX_DURATION_MS 120000
 
-// /api/test/servo/move's own backstop, deliberately much shorter than the
-// one above (~1 full rotation at full speed, see SERVO_STOP_US/FULL_CW_US).
-// Without a trustworthy "reached" condition — the rack encoder has to be
-// mechanically coupled to the lead screw for that to mean anything — a move
-// toward an unreachable target would otherwise just spin blind for up to
-// SERVO_MANUAL_MAX_DURATION_MS. Capping each move attempt this short bounds
-// the worst case to a couple of seconds: tap "Переместить" again to keep
-// going if it stopped short of the target.
-#define SERVO_MOVE_STEP_TIMEOUT_MS 2000
+// Closed-loop move (/api/test/servo/move, the automatic cycle, the sweep)
+// stops on whichever comes first: target reached on the external rack
+// encoder, a limit switch in the direction of travel, encoder STALL (servo
+// powered but the encoder isn't counting — rack jammed, encoder unplugged,
+// or not coupled to the lead screw), encoder counting the WRONG WAY (see
+// Settings::encoderReversed), or this overall backstop. Stall detection is
+// what makes a long backstop safe: it no longer has to be ~2s to keep a
+// blind spin short, so a long move finishes in one tap instead of several.
+#define SERVO_MOVE_STEP_TIMEOUT_MS     30000
+#define SERVO_STALL_TIMEOUT_MS         600   // no encoder progress for this long while driving -> stop
+#define SERVO_STALL_MIN_COUNTS         3     // encoder change that counts as "still moving"
+#define SERVO_WRONG_DIR_COUNTS         40    // moved this far AWAY from the target -> stop (encoder direction reversed)
+#define SERVO_TARGET_TOLERANCE_COUNTS  4     // "reached" when within this many counts of the target
+
+// Speed profile near the target (continuous-rotation servo: speed is the
+// pulse's distance from the stop pulse). Full speed far away, slowing
+// linearly inside the slow zone down to MIN — which must stay above the
+// servo's own dead band, or it stops short and reports "stall".
+#define SERVO_FULL_SPEED_US            1000  // 1500 +/- 1000 -> 2500/500us, same as before
+#define SERVO_MIN_SPEED_US             150
+#define SERVO_SLOW_ZONE_COUNTS         400
 
 // Ultrasound/force resonance sweep ("авто-свип") — the real alternative to
 // a guessed frequency<->force formula: automatically moves to each

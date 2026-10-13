@@ -51,6 +51,7 @@ static void buildStatusJson(String &out) {
 	JsonObject encoder = doc["encoder"].to<JsonObject>();
 	encoder["counts"] = sEncoder->counts();
 	encoder["mm"] = sEncoder->millimeters(gSettings.encoderCountsPerMm);
+	encoder["reversed"] = gSettings.encoderReversed;
 
 	// Direct GPIO reads, not inferred — the one place to actually see why a
 	// servo move just stopped (hit a switch) instead of guessing from timing.
@@ -58,6 +59,8 @@ static void buildStatusJson(String &out) {
 	servo["busy"] = sServo->isBusy();
 	servo["zeroSwitchTripped"] = sServo->zeroSwitchTripped();
 	servo["maxSwitchTripped"] = sServo->maxSwitchTripped();
+	servo["targetCounts"] = sServo->targetCounts();
+	servo["lastStop"] = servoStopReasonName(sServo->lastStopReason());
 
 	Reading current = sUltrasound->readCurrentSense();
 	JsonObject ultrasound = doc["ultrasound"].to<JsonObject>();
@@ -153,7 +156,8 @@ void beginWebApi(RangeFinder *range, RackEncoder *encoder, PressureServo *servo,
 	// Drives to an absolute target position (mm, same reference as
 	// encoder.mm in /api/status — zeroed by homing) using the same safe
 	// closed loop the automatic cycle uses: stops at the target, at a
-	// relevant limit switch, on timeout (rack stuck), or on /api/stop.
+	// relevant limit switch, on encoder stall / wrong encoder direction,
+	// on timeout, or on /api/stop. Why it stopped: servo.lastStop in status.
 	// This is the "крутится до значения или до концевика" test mode —
 	// unlike /api/test/servo (startTimed), it has an actual stop condition
 	// besides elapsed time, so it can't stall the servo against a hard
@@ -286,14 +290,19 @@ void beginWebApi(RangeFinder *range, RackEncoder *encoder, PressureServo *servo,
 			JsonDocument doc;
 			if (len > 0 && deserializeJson(doc, readBody(data, len))) { sendError(req, 400, "bad json"); return; }
 			bool cw = doc["clockwise"] | gSettings.pressureHomeClockwise;
+			// Queued and driven by loop() like every other servo move — this
+			// handler only waits for the result (calling update() here too
+			// would drive the servo from two tasks at once).
 			sServo->startHoming(sEncoder, cw, PRESSURE_HOME_TIMEOUT_MS);
-			while (sServo->isBusy()) {
-				sServo->update();
+			uint32_t waitStart = millis();
+			while (sServo->isBusy() && millis() - waitStart < PRESSURE_HOME_TIMEOUT_MS + 2000) {
 				delay(5);
 			}
 			JsonDocument res;
 			res["ok"] = sServo->lastHomeReached();
 			res["encoderCounts"] = sEncoder->counts();
+			res["lastStop"] = servoStopReasonName(sServo->lastStopReason());
+			res["encoderDirectionFlipped"] = sServo->encoderDirectionFlipped();
 			String out;
 			serializeJson(res, out);
 			sendJson(req, 200, out);
