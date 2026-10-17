@@ -16,7 +16,7 @@ const BOT_NAMES = ["Борис", "Семён", "Гена", "Тимур", "Оле
 
 const root = document.getElementById("app")!;
 
-interface Setup { mode: "solo" | "hotseat" | "network"; length: "quick" | "classic"; humans: string[]; bots: number; difficulty: "easy" | "normal" | "hard"; speed: Speed; startCompanies?: boolean }
+interface Setup { mode: "solo" | "hotseat" | "network"; length: "quick" | "classic"; humans: string[]; bots: number; difficulty: "easy" | "normal" | "hard"; speed: Speed; startCompanies?: boolean; realism?: "off" | "normal" | "hard" }
 const saved = (() => { try { return JSON.parse(localStorage.getItem("oligarh-setup") ?? "null") as Setup | null; } catch { return null; } })();
 const setup: Setup = saved ?? { mode: "solo", length: "quick", humans: ["Вы"], bots: 3, difficulty: "normal", speed: "normal" };
 
@@ -110,6 +110,7 @@ async function hostLobby() {
     box.append(field("Боты", seg2(String(setup.bots), opts, (v) => { setup.bots = Number(v); draw(); })));
     box.append(field("Длина партии", seg2(setup.length, [["quick", "Быстрая · 15 раундов"], ["classic", "Классика"]], (v) => { setup.length = v; draw(); })));
     box.append(startField(() => draw()));
+    box.append(realismField(() => draw()));
     box.append(field("Анимация на этом телефоне", seg2(setup.speed, [["normal", "Обычная"], ["fast", "Быстрая"], ["instant", "Мгновенно"]], (v) => { setup.speed = v; draw(); })));
     const go = btn(humans.length + setup.bots >= 2 ? "Начать игру" : "Нужен хотя бы один соперник", () => startHost(host), "primary big");
     go.disabled = humans.length + setup.bots < 2;
@@ -135,7 +136,7 @@ function startHost(host: NetHost) {
   players.forEach((p, i) => { p.token = TOKENS[i]; p.color = COLORS[i]; });
   root.replaceChildren();
   const app = new App(root, () => { host.close(); location.reload(); });
-  void app.start({ players, mode: "network", length: setup.length, startCompanies: !!setup.startCompanies }, setup.speed, host);
+  void app.start({ players, mode: "network", length: setup.length, startCompanies: !!setup.startCompanies, realism: setup.realism ?? "normal" }, setup.speed, host);
 }
 
 /** Гость: ищем столы рядом. */
@@ -211,6 +212,7 @@ function renderSetup() {
   box.append(modeField());
   box.append(field("Длина партии", seg(setup.length, [["quick", "Быстрая · 15 раундов"], ["classic", "Классика"]], (v) => { setup.length = v; })));
   box.append(startField(() => renderSetup()));
+  box.append(realismField(() => renderSetup()));
 
   const names = document.createElement("div");
   names.className = "names";
@@ -248,6 +250,13 @@ function renderSetup() {
   root.append(box);
 }
 
+/** Реализм: рейдеры, проверки, забастовки, форс-мажоры. */
+function realismField(redraw: () => void) {
+  const f = field("Реализм", seg2(setup.realism ?? "normal", [["off", "Выкл"], ["normal", "Умеренно"], ["hard", "Жёстко"]], (v) => { setup.realism = v; redraw(); }));
+  f.append(el("div", "muted small", "Проверки, забастовки, пожары, санкции, рейдеры. Владельцам звонят — на решение 30 секунд."));
+  return f;
+}
+
 /** Стартовые предприятия: по умолчанию все начинают с пустыми руками. */
 function startField(redraw: () => void) {
   const f = field("Стартовое предприятие", seg2(setup.startCompanies ? "yes" : "no", [["no", "Нет — всё покупаем сами"], ["yes", "По одному каждому"]], (v) => { setup.startCompanies = v === "yes"; redraw(); }));
@@ -268,7 +277,7 @@ function startGame() {
   players.forEach((p, i) => { p.token = TOKENS[i]; p.color = COLORS[i]; });
   root.replaceChildren();
   const app = new App(root, () => { location.reload(); });
-  void app.start({ players, mode: setup.mode, length: setup.length, startCompanies: !!setup.startCompanies }, setup.speed);
+  void app.start({ players, mode: setup.mode, length: setup.length, startCompanies: !!setup.startCompanies, realism: setup.realism ?? "normal" }, setup.speed);
 }
 
 renderSetup();

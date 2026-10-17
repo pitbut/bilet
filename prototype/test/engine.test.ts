@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GameConfig, GameState, act, adCost, demolishAskList, buildCost, canTakeover, capital, companyValue, fame, handValue, lotPrice, luxCost, newGame, rentFor } from "../src/engine/engine";
+import { GameConfig, GameState, act, adCost, controlled, demolishAskList, voteAskList, buildCost, canTakeover, capital, companyValue, fame, handValue, lotPrice, luxCost, newGame, rentFor } from "../src/engine/engine";
 import { playOut } from "../src/engine/runner";
 
 const players = (n: number, bot = false): GameConfig["players"] =>
@@ -226,11 +226,11 @@ describe("биржа", () => {
     return s;
   };
 
-  it("владелец выставляет до 40%, покупатель платит владельцу, цена растёт", () => {
+  it("владелец выставляет акции (можно хоть все), покупатель платит владельцу, цена растёт", () => {
     const s = own();
     const price0 = lotPrice(s, 39);
     expect(price0).toBe(40);
-    expect(act(s, 0, { t: "listShares", cell: 39, lots: 5 }).ok).toBe(false); // оставить 60%
+    expect(act(s, 0, { t: "listShares", cell: 39, lots: 11 }).ok).toBe(false);
     expect(act(s, 0, { t: "listShares", cell: 39, lots: 2 }).ok).toBe(true);
     pass(s);
     const m0 = s.players[0].money, m1 = s.players[1].money;
@@ -628,5 +628,137 @@ describe("бонус за рекламу", () => {
     s.players[1].bot = true;
     s.current = 1;
     expect(act(s, 1, { t: "adReward" }).ok).toBe(false);
+  });
+});
+
+describe("акции до 100% и контрольный пакет", () => {
+  it("кто скупил больше владельца — тот и управляет; залог компании становится залогом акций", () => {
+    const s = game(3);
+    const p = s.props[39];
+    p.owner = 0; p.holders = { 1: 4 };
+    expect(controlled(p)).toBe(true);
+    s.players[0].loans.push({ id: 9, kind: "company", cell: 39, amount: 50, due: 9 });
+    expect(act(s, 0, { t: "listShares", cell: 39, lots: 2 }).ok).toBe(true);
+    s.current = 1; s.phase = "end";
+    expect(act(s, 1, { t: "buyShares", cell: 39, lots: 2 }).ok).toBe(true);
+    expect(p.owner).toBe(1); // 60% у второго
+    expect(p.holders[0]).toBe(4);
+    expect(controlled(p)).toBe(true);
+    expect(s.players[0].loans[0].kind).toBe("shares");
+    expect(s.players[0].inbox?.some((m) => m.text.includes("управляет"))).toBe(true);
+  });
+
+  it("без контрольного пакета — голосование: боты за стройку, против залога; люди — по согласию", () => {
+    const s = game(3);
+    s.players[2].bot = true;
+    const p = s.props[39];
+    p.owner = 0; p.holders = { 1: 3, 2: 3 }; // у владельца 40%
+    expect(controlled(p)).toBe(false);
+    expect(voteAskList(s, 39)).toEqual([1]);
+    s.landedOwn = 39;
+    expect(act(s, 0, { t: "build", cell: 39, branch: "rent" }).ok).toBe(true); // 40% + бот 30% = 70%
+    s.props[37].owner = 0; s.props[37].holders = { 1: 3, 2: 3 };
+    expect(act(s, 0, { t: "mortgage", cell: 37 }).error).toMatch(/против/i); // бот против залога
+    expect(act(s, 0, { t: "takeLoan", cell: 37, kind: "company", amount: 20 }).ok).toBe(false);
+    expect(act(s, 0, { t: "takeLoan", cell: 37, kind: "company", amount: 20, approve: [1] }).ok).toBe(true); // 40% + 30% человека
+  });
+
+  it("продал всё — управление у крупнейшего акционера", () => {
+    const s = game(2);
+    const p = s.props[39];
+    p.owner = 0; p.holders = {};
+    p.listings = [{ seller: 0, lots: 10 }];
+    s.current = 1; s.phase = "end"; s.players[1].money = 5000;
+    act(s, 1, { t: "buyShares", cell: 39, lots: 10 });
+    expect(p.owner).toBe(1);
+    expect(p.holders).toEqual({});
+  });
+});
+
+describe("реализм: рейдеры, проверки, ЧП", () => {
+  const setup = () => {
+    const s = game(3);
+    s.players[1].bot = true; s.players[2].bot = true;
+    s.props[39].owner = 0; s.props[39].level = 1; s.props[39].branch = "rent"; s.props[39].invested = 200;
+    s.current = 1; s.phase = "end"; s.players[1].money = 3000;
+    return s;
+  };
+
+  it("заказ рейдеров: владельцу звонит юрист, откупились — деньги рейдеру", () => {
+    const s = setup();
+    const r = act(s, 1, { t: "orderRaid", cell: 39 });
+    expect(r.ok).toBe(true);
+    const c = s.crises![0];
+    expect(c.kind).toBe("raid");
+    expect(s.players[0].inbox?.some((m) => m.crisis === c.id)).toBe(true);
+    const raiderMoney = s.players[1].money;
+    const pay = c.options.find((o) => o.id === "payoff")!.cost;
+    expect(act(s, 0, { t: "crisisAnswer", id: c.id, choice: "payoff" }).ok).toBe(true);
+    expect(s.crises!.length).toBe(0);
+    expect(s.players[1].money).toBe(raiderMoney + pay);
+    expect(s.props[39].owner).toBe(0);
+    expect(act(s, 1, { t: "orderRaid", cell: 39 }).error).toMatch(/через/); // перерыв 3 круга
+  });
+
+  it("без защиты захваты иногда удаются, с полной защитой — почти никогда", () => {
+    let weak = 0, strong = 0;
+    for (let seed = 1; seed <= 60; seed++) {
+      for (const g of [0, 3]) {
+        const s = setup(); s.rng = seed * 97;
+        s.props[39].guard = g; s.props[39].lawyer = g > 0;
+        act(s, 1, { t: "orderRaid", cell: 39 });
+        act(s, 0, { t: "crisisAnswer", id: s.crises![0].id, choice: g ? "lawyers" : "nothing" });
+        if (s.props[39].owner === 1) { if (g) strong++; else weak++; }
+      }
+    }
+    expect(weak).toBeGreaterThan(20);
+    expect(strong).toBeLessThan(8);
+  });
+
+  it("не ответили — решается само по истечении времени (ничего не делать)", () => {
+    const s = setup();
+    act(s, 1, { t: "orderInspection", cell: 39 });
+    expect(s.crises!.length).toBe(1);
+    for (let k = 0; k < 4; k++) { act(s, s.current, { t: "endTurn" }); if (s.phase !== "end") { s.phase = "end"; } }
+    expect(s.crises!.length).toBe(0);
+    expect(s.players[0].inbox?.some((m) => m.text.includes("Проверка"))).toBe(true);
+  });
+
+  it("ЧП: застрахованным ремонт бесплатный; без ремонта здание теряет уровень", () => {
+    const s = setup();
+    s.props[39].insuredUntil = 99;
+    s.props[39].frozen = 0;
+    s.crises = [];
+    // создаём ЧП через случайное событие: подбираем зерно, пока не выпадет ЧП на 39
+    let found = false;
+    for (let seed = 1; seed < 400 && !found; seed++) {
+      const t = setup(); t.props[39].insuredUntil = 99; t.round = 5; t.rng = seed;
+      for (const i of Object.keys(t.props)) if (+i !== 39) t.props[+i].owner = null;
+      act(t, 1, { t: "endTurn" });
+      t.phase = "end";
+      act(t, 2, { t: "endTurn" }); // новый круг — случайное событие
+      const c = (t.crises ?? []).find((x) => x.kind === "disaster");
+      if (!c) continue;
+      found = true;
+      expect(c.options.find((o) => o.id === "repair")!.cost).toBe(0);
+      act(t, 0, { t: "crisisAnswer", id: c.id, choice: "nothing" });
+      expect(t.props[39].level === 0 || (t.props[39].frozen ?? 0) > 0).toBe(true);
+    }
+    expect(found).toBe(true);
+  });
+
+  it("охрана без контрольного пакета — голосованием; бот-акционер за", () => {
+    const s = game(3);
+    s.players[2].bot = true;
+    s.props[39].owner = 0; s.props[39].holders = { 1: 3, 2: 3 };
+    s.current = 0; s.phase = "end";
+    expect(act(s, 0, { t: "guard", cell: 39 }).ok).toBe(true); // 40% + бот 30%
+    expect(s.props[39].guard).toBe(1);
+  });
+
+  it("реализм выключен — заказать нельзя и случайных событий нет", () => {
+    const s = game(2, { realism: "off" });
+    s.props[39].owner = 1; s.current = 0; s.phase = "end";
+    expect(act(s, 0, { t: "orderRaid", cell: 39 }).ok).toBe(false);
   });
 });

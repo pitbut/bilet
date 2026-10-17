@@ -1,6 +1,6 @@
 // Боты с характерами: Акула, Скряга, Игроман, Торгаш.
 import { BOARD, BranchId, industryCells } from "./board";
-import { AD, Action, ExpKind, GameState, LUX, LuxKind, Personality, adCost, luxPayback, canBuild, canTakeover, companyValue, expCost, freeLots, hasBuff, hasMonopoly, loanLimit, lotPrice, luxCost, ownedCount, randInt, rentFor } from "./engine";
+import { AD, Action, ExpKind, GameState, LUX, LuxKind, Personality, adCost, luxPayback, canBuild, canTakeover, companyValue, expCost, freeLots, keepControlFree, hasBuff, canOrder, capital, companyValue as cValue, GUARD_COST, insureCost, isInsured, hasMonopoly, loanLimit, lotPrice, luxCost, ownedCount, randInt, rentFor } from "./engine";
 
 const RESERVE: Record<Personality, number> = { shark: 100, miser: 400, gambler: 150, trader: 250 };
 const BRANCH: Record<Personality, BranchId> = { shark: "rent", miser: "income", gambler: "special", trader: "rent" };
@@ -93,7 +93,7 @@ function stockMove(s: GameState, reserve: number): Action | null {
     if (col !== undefined) return { t: "takeLoan", cell: col, kind: "company", amount: Math.floor(loanLimit(s, pl.id, col, "company") * 0.8) };
   }
   if (pl.trades >= 2) return null;
-  const owned = Object.keys(s.props).map(Number).filter((i) => s.props[i].owner === pl.id && freeLots(s, pl.id, i) > 0);
+  const owned = Object.keys(s.props).map(Number).filter((i) => s.props[i].owner === pl.id && keepControlFree(s, pl.id, i) > 0); // контроль не отдаёт
   if (pl.money < reserve * 0.8 && owned.length) {
     const i = owned.sort((a, b) => lotPrice(s, b) - lotPrice(s, a))[0];
     const humans = s.players.filter((p) => !p.bot && !p.bankrupt);
@@ -145,6 +145,29 @@ function lifeMove(s: GameState, reserve: number): Action | null {
   if (s.phase === "roll" && !hasBuff(s, pl.id, "vacation")) {
     const big = Object.keys(s.props).map(Number).map((i) => canBuild(s, pl.id, i)).filter((c) => c.cost && c.cost >= 900);
     if (big.length && pl.money > big[0].cost! + expCost("vacation") + reserve) return { t: "experience", kind: "vacation" };
+  }
+  // защита своих компаний: охрана дорогим, страховка крупным
+  if (s.cfg.realism !== "off") {
+    for (const i of Object.keys(s.props).map(Number)) {
+      const p = s.props[i];
+      if (p.owner !== pl.id || p.mortgaged) continue;
+      const g = p.guard ?? 0;
+      if (g < 1 && cValue(s, i) > 900 && pl.money - GUARD_COST[g] > reserve * 4) return { t: "guard", cell: i };
+      if (p.level >= 2 && !isInsured(s, i) && (pers === "miser" || pers === "trader") && pl.money - insureCost(s, i) > reserve * 3) return { t: "insureCompany", cell: i };
+    }
+    // заказать рейдеров или проверку лидеру — иногда, если денег много
+    if ((pers === "shark" || pers === "gambler") && pl.money > 1000 && randInt(s, 6) === 0) {
+      const rivals = s.players.filter((x) => x.id !== pl.id && !x.bankrupt).sort((a, b) => capital(s, b.id) - capital(s, a.id));
+      const leader = rivals[0];
+      if (leader && capital(s, leader.id) > capital(s, pl.id)) {
+        const target = Object.keys(s.props).map(Number).filter((i) => s.props[i].owner === leader.id).sort((a, b) => cValue(s, b) - cValue(s, a))[0];
+        if (target !== undefined) {
+          const raid = pers === "shark" && (s.props[target].guard ?? 0) <= 1 && canOrder(s, pl.id, target, "raid").ok && pl.money - cValue(s, target) * 0.2 > reserve * 3;
+          if (raid) return { t: "orderRaid", cell: target };
+          if (canOrder(s, pl.id, target, "inspection").ok) return { t: "orderInspection", cell: target };
+        }
+      }
+    }
   }
   // реклама самой доходной компании
   if (T.ads && Object.values(s.props).filter((p) => p.owner === pl.id && p.ad).length < 2) {

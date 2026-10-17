@@ -5,7 +5,7 @@ import { BOARD, BRANCH_EFFECTS, BranchId, INDUSTRIES } from "../engine/board";
 import {
   Action, GameConfig, GameEvent, GameState, Result, act, active, buildCost, canBuild, canLounge, canTakeover, capital, companyValue, drainEvents, freeLots,
   INCOME_SHARE, PUBLIC_PROTECT_LOTS, coopAnswer, loanLimit, WORKOFF_DISCOUNT, lotPrice, newGame, ownerLots, rentFor, soldLots,
-  AD, AdKind, AD_REWARD, adRewardWait, DEPOSIT_RATE, bankSaleValue, demolishAskList, EXPERIENCES, ExpKind, FAME_RENT, LUX, LuxKind, LUX_TAX, EXP_TAX, STASH_MAX, adCost, expCost, fame, luxCost, luxPayback,
+  AD, AdKind, AD_REWARD, adRewardWait, DEPOSIT_RATE, bankSaleValue, demolishAskList, voteAskList, controlled, Crisis, DECISION_NAME, Decision, GUARD_COST, LAWYER_UPKEEP, INSURE_ROUNDS, INSPECTION_COST, canOrder, insureCost, isInsured, raidCost, EXPERIENCES, ExpKind, FAME_RENT, LUX, LuxKind, LUX_TAX, EXP_TAX, STASH_MAX, adCost, expCost, fame, luxCost, luxPayback,
   loanRate, loanShare, luxuryTaxCell,
 } from "../engine/engine";
 import { botStep } from "../engine/runner";
@@ -285,14 +285,20 @@ export class App {
   /** Хозяин: действие гостя. Для складчины сначала спрашиваем живых партнёров. */
   /** Снос, когда у владельца нет большинства: спрашиваем людей-акционеров. */
   private async withVotes(pid: number, a: Action): Promise<Action> {
-    if (a.t !== "demolish") return a;
-    const ask = demolishAskList(this.s, a.cell);
+    const map: Partial<Record<Action["t"], Decision>> = { demolish: "demolish", build: "build", advertise: "advertise", mortgage: "mortgage", guard: "guard", lawyer: "lawyer", insureCompany: "insure" };
+    let d = map[a.t];
+    if (a.t === "takeLoan" && a.kind === "company") d = "loan";
+    if (!d || !("cell" in a)) return a;
+    if (a.t === "lawyer" && this.s.props[a.cell].lawyer) return a; // уволить юриста можно без голосования
+    const ask = voteAskList(this.s, a.cell).filter((x) => x !== pid);
+    if (!ask.length) return a;
     const approve: number[] = [];
+    const what = d === "demolish" ? "снести постройки (каждому вернётся его доля половины вложений)" : DECISION_NAME[d];
     for (const h0 of ask) {
-      const ok = await this.askHuman(h0, `${this.s.players[pid].name} хочет снести постройки в «${BOARD[a.cell].name}». Вам вернётся ваша доля половины вложений. Согласны на снос?`);
+      const ok = await this.askHuman(h0, `У «${BOARD[a.cell].name}» нет контрольного пакета — решаем голосованием. ${this.s.players[pid].name} предлагает: ${what}. Вы «за»?`);
       if (ok) approve.push(h0);
     }
-    return { ...a, approve };
+    return { ...a, approve } as Action;
   }
 
   private async hostRequest(pid: number, a: Action): Promise<ActReply> {
@@ -368,6 +374,7 @@ export class App {
           this.passedTurn = s.turnCounter;
           await this.passPhone(cur.name, "ваш ход");
           this.render();
+          await this.pendingCrises(cur.id);
         }
       } while (this.again);
     } finally {
@@ -379,7 +386,8 @@ export class App {
     if (this.stepping) return; // идёт анимация — повторные нажатия игнорируем
     this.panel.replaceChildren(h("div", { class: "hint" }, "…")); // пока идёт анимация — без кнопок
     this.cards.replaceChildren();
-    void this.exec(this.s.current, a).then(({ r }) => {
+    const pid = this.s.current;
+    void (this.net?.role === "client" ? Promise.resolve(a) : this.withVotes(pid, a)).then((a2) => this.exec(pid, a2)).then(({ r }) => {
       if (!r.ok) { this.toast(r.error ?? "Нельзя", "warn"); this.render(); }
       void this.step();
     });
@@ -470,6 +478,10 @@ export class App {
         case "jackpot":
           sfx.jackpot();
           this.toast(`ДЖЕКПОТ! ${s.players[e.player].name} срывает ${fmt(e.amount)} млн ₽`, "good", 5000);
+          break;
+        case "crisisDone":
+          await this.scene.sync(s);
+          if (e.players.some((x) => this.isLocal(x)) || s.cfg.mode === "hotseat") { sfx.alert(); this.toast(e.text, "card", 4500); }
           break;
         case "stock":
           if (e.players.includes(this.meId) || s.cfg.mode === "hotseat") {
@@ -578,7 +590,8 @@ export class App {
         h("div", { class: "crow" }, h("b", {}, c.name), h("span", { class: "muted" }, p.construction ? `стройка → ${p.construction.target}` : p.level ? `ур. ${p.level}` : p.mortgaged ? "залог" : "участок")),
         h("div", { class: "cmeta" }, p.branch && c.industry ? INDUSTRIES[c.industry].branches[p.branch] : c.industry ? INDUSTRIES[c.industry].name : "транспорт / энергия"),
         h("div", { class: "cmeta" }, `аренда ${fmt(rentFor(s, i))}${income ? ` · доход ${fmt(income)}/раунд` : ""}${p.ad ? ` · 📣 ${AD[p.ad.kind].name.toLowerCase()}` : ""}`),
-        h("div", { class: "cmeta" }, soldLots(p) ? `у акционеров ${soldLots(p) * 10}% · 10% = ${fmt(lotPrice(s, i))}` : `акции не продавались · 10% = ${fmt(lotPrice(s, i))}`)));
+        h("div", { class: "cmeta" }, soldLots(p) ? `у акционеров ${soldLots(p) * 10}% · 10% = ${fmt(lotPrice(s, i))}` : `акции не продавались · 10% = ${fmt(lotPrice(s, i))}`),
+        this.companyBadges(i)));
     el.addEventListener("click", () => { sfx.click(); this.showDeal(i); });
     return el;
   }
@@ -612,13 +625,28 @@ export class App {
         button("Предложить выкуп", () => send({ t: "bidCompany", cell: i, price: Number(whole.value) }), dis)),
       h("h3", {}, "Купить акции у владельца"),
       free ? h("div", { class: "muted tiny" }, `С каждой аренды и дохода здесь вы будете получать свою долю. Владелец может продать до ${free * 10}%.`)
-        : h("div", { class: "muted tiny" }, "Владелец уже продал всё, что можно (оставляет себе 60%). Ищите эти акции на «Бирже»."),
+        : h("div", { class: "muted tiny" }, "Свободных акций у владельца нет. Ищите их на «Бирже»."),
       free ? h("div", { class: "row offerbox" }, lots, h("span", { class: "muted" }, "по"), per, h("span", { class: "muted" }, "за 10%"),
         button("Предложить", () => send({ t: "bidShares", cell: i, lots: Number((lots as HTMLSelectElement).value), price: Number(per.value) }), dis)) : "",
       myTurn ? "" : h("div", { class: "hint" }, "Предлагать сделки можно в свой ход — до броска или в конце хода."),
+      s.cfg.realism === "off" ? "" : this.darkMethods(i, myTurn),
       h("div", { class: "muted tiny" }, `У вас ${fmt(pl.money)} млн ₽.`),
     );
     this.modal.dataset.view = "deal";
+  }
+
+  /** «Тёмные методы»: заказать рейдеров или проверку конкуренту. */
+  private darkMethods(i: number, myTurn: boolean): Node {
+    const s = this.s, me = this.meId, p = s.props[i];
+    const raid = canOrder(s, me, i, "raid"), insp = canOrder(s, me, i, "inspection");
+    const order = (t: "orderRaid" | "orderInspection") => { void this.run(me, { t, cell: i }).then((r) => { if (!r.ok) { this.toast(r.error ?? "Нельзя", "warn"); sfx.alert(); } else { sfx.alert(); this.toast(r.info ?? "Заказ принят", "card"); } this.showDeal(i); }); };
+    return h("div", {},
+      h("h3", {}, "🕶 Жёсткие методы"),
+      h("div", { class: "muted tiny" }, `Охрана компании — ${p.guard ?? 0} из 3${controlled(p) ? "" : ", нет контрольного пакета — захват проще"}${p.lawyer ? ", есть юрист" : ""}. Владельцам позвонят, у них будет время отбиться. Провалится захват — могут завести дело: штраф и пропуск хода. Заказывать можно раз в 3 круга.`),
+      h("div", { class: "row" },
+        button(`Рейдерский захват · ${fmt(raidCost(s, i))}`, () => order("orderRaid"), myTurn && raid.ok ? "danger" : "disabled"),
+        button(`Заказать проверку · ${fmt(INSPECTION_COST)}`, () => order("orderInspection"), myTurn && insp.ok ? "" : "disabled")),
+      !raid.ok && raid.reason !== `Нужно ${raidCost(s, i)}` ? h("div", { class: "muted tiny" }, raid.reason ?? "") : "");
   }
 
   /** Окно «Мои карточки»: все клетки игрока; по стройкам тапают в чужой ход прямо здесь. */
@@ -757,7 +785,7 @@ export class App {
     const status = site ? `стройка → ур. ${site.target}` : p.mortgaged ? "в залоге" : p.level ? `ур. ${p.level}` : "участок";
     const body = h("div", { class: "cbody" },
       h("div", { class: "crow" }, h("b", {}, c.name), h("span", { class: "muted" }, status)),
-      h("div", { class: "cmeta" }, `аренда ${fmt(rentFor(s, i))}${p.ad ? ` · 📣 ещё ${p.ad.rounds} х.` : ""}`));
+      h("div", { class: "cmeta" }, `аренда ${fmt(rentFor(s, i))}${p.ad ? ` · 📣 ещё ${p.ad.rounds} х.` : ""}${(p.frozen ?? 0) > 0 ? ` · ⛔ простой ${p.frozen}` : ""}${(s.crises ?? []).some((c) => c.cell === i) ? " · 🚨" : ""}${p.owner === pid && !controlled(p) ? " · голосование" : ""}`));
     if (site) {
       body.append(h("div", { class: "prog" }, h("div", { style: `width:${Math.min(100, site.progress)}%` })),
         h("div", { class: "cmeta" }, tappable ? `${Math.floor(Math.min(100, site.progress))}% · тапайте!` : `${Math.floor(Math.min(100, site.progress))}%`));
@@ -850,7 +878,8 @@ export class App {
       }
       if (!p.mortgaged && p.level === 0 && !p.construction) acts.append(button(`Заложить +${fmt(c.price! / 2)}`, () => { this.doAction({ t: "mortgage", cell: i }); this.showBuild(); }, "ghost"));
       if (p.mortgaged) acts.append(button(`Выкупить −${fmt(c.price! * 0.6)}`, () => { this.doAction({ t: "unmortgage", cell: i }); this.showBuild(); }, "ghost"));
-      item.append(acts);
+      item.append(this.companyBadges(i), acts);
+      if (s.cfg.realism !== "off") item.append(this.protectionRow(me.id, i));
       list.append(item);
     }
     const take = BOARD.filter((c) => canTakeover(s, me.id, c.index).cost !== undefined);
@@ -863,6 +892,33 @@ export class App {
       }
     }
     this.openModal(h("h2", {}, "Стройки и сделки"), h("div", { class: "muted" }, `Деньги: ${fmt(me.money)} млн ₽ · строить можно только на клетке, где вы стоите (или которую только что купили), один раз за ход`), opts, list);
+  }
+
+  /** Значки состояния компании: контроль, охрана, юрист, страховка, простой, нарушения. */
+  private companyBadges(i: number): Node {
+    const s = this.s, p = s.props[i];
+    const b: [string, boolean][] = [];
+    if (p.owner !== null) b.push([controlled(p) ? `контроль ${ownerLots(p) * 10}%` : `нет контрольного пакета (${ownerLots(p) * 10}%) — голосование`, !controlled(p)]);
+    if (p.guard) b.push([`🛡 охрана ${p.guard}`, false]);
+    if (p.lawyer) b.push(["⚖ юрист", false]);
+    if (isInsured(s, i)) b.push([`🧯 страховка до ${p.insuredUntil} р.`, false]);
+    if ((p.frozen ?? 0) > 0) b.push([`⛔ простой ${p.frozen} х.`, true]);
+    if (p.unsafe) b.push(["⚠ нарушения ТБ", true]);
+    const open = (s.crises ?? []).find((c) => c.cell === i);
+    if (open) b.push([`🚨 ${open.title}`, true]);
+    return h("div", { class: "badge-row" }, ...b.map(([t, bad]) => h("span", { class: bad ? "bad" : "" }, t)));
+  }
+
+  /** Защита своей компании: охрана, юрист, страховка. */
+  private protectionRow(pid: number, i: number): Node {
+    const s = this.s, p = s.props[i], pl = s.players[pid];
+    const go = (a: Action) => { void this.run(pid, a).then((r) => { if (!r.ok) { this.toast(r.error ?? "Нельзя", "warn"); sfx.alert(); } else sfx.coin(); this.showBuild(i); }); };
+    const g = p.guard ?? 0;
+    const row = h("div", { class: "row" });
+    if (g < 3) row.append(button(`🛡 Охрана ${g}→${g + 1} · ${fmt(GUARD_COST[g])}`, () => go({ t: "guard", cell: i }), pl.money >= GUARD_COST[g] ? "small" : "small disabled"));
+    row.append(button(p.lawyer ? "⚖ Уволить юриста" : `⚖ Юрист · ${LAWYER_UPKEEP}/ход`, () => go({ t: "lawyer", cell: i }), "small ghost"));
+    if (!isInsured(s, i)) row.append(button(`🧯 Страховка ${INSURE_ROUNDS} р. · ${fmt(insureCost(s, i))}`, () => go({ t: "insureCompany", cell: i }), pl.money >= insureCost(s, i) ? "small ghost" : "small ghost disabled"));
+    return h("div", {}, h("div", { class: "muted tiny" }, "Защита: охрана — от рейдеров; юрист — меньше нарушений при проверках и шанс отбить захват; страховка — ремонт после ЧП бесплатно."), row);
   }
 
   /** Казино: lounge = играть, пока ходят другие; иначе — визит на клетку «Казино». */
@@ -975,6 +1031,7 @@ export class App {
     const e = this.callQueue.shift();
     if (!e) return;
     const pl = this.s.players[e.player];
+    if (e.crisis !== undefined) { await this.crisisCall(e.player, e.crisis, e.msg, false); void this.nextCall(); return; }
     if (!this.callsOn || e.player !== this.meId) {
       this.toast(`📨 ${CALLERS[e.from].name} (${e.from === "bank" ? "банк" : "биржа"}) — сообщение${e.player !== this.meId ? ` для ${pl.name}` : ""} во «Входящих»`, "card", 3500);
       this.renderTopBar();
@@ -995,6 +1052,53 @@ export class App {
     void this.nextCall();
   }
 
+  /** Неприятность компании: звонок с вариантами ответа и таймером 30 секунд. */
+  private async crisisCall(pid: number, id: number, msg: number | undefined, noRing: boolean) {
+    const s = this.s, pl = s.players[pid];
+    const c = (s.crises ?? []).find((x) => x.id === id);
+    if (!c || c.answers[pid] !== undefined) return;
+    if (!this.callsOn || pid !== this.meId) {
+      this.toast(`⚠ ${c.title}${pid !== this.meId ? ` — решение за ${pl.name}` : ""}: ответ во «📨 Входящих»`, "warn", 4000);
+      this.renderTopBar();
+      return;
+    }
+    this.calling = true;
+    try {
+      const choices = this.crisisChoices(pid, c);
+      const r = await showCall(this.ui, { from: c.kind === "strike" ? "union" : c.kind === "disaster" ? "emergency" : "lawyer", playerName: pl.name, playerColor: pl.color, text: c.text, choices, timeLimit: 30, noRing });
+      if (msg !== undefined && (r === "chosen" || r === "timeout")) this.markRead(pid, msg);
+      if (r === "timeout" && (s.crises ?? []).some((x) => x.id === id)) {
+        await this.exec(pid, { t: "crisisAnswer", id, choice: "nothing" });
+        this.toast("Время вышло — решение «ничего не делать»", "warn");
+        void this.step();
+      } else if (r !== "chosen") this.toast("Решение не принято — ответьте во «📨 Входящих», пока не поздно", "warn", 3500);
+    } finally {
+      this.calling = false;
+      this.renderTopBar();
+      if (this.modalView === "inbox") this.showInbox();
+    }
+  }
+
+  /** Варианты ответа с долей расходов игрока. */
+  private crisisChoices(pid: number, c: Crisis) {
+    const s = this.s, p = s.props[c.cell];
+    const lots = pid === p.owner ? ownerLots(p) : p.holders[pid] ?? 0;
+    return c.options.map((o) => ({
+      label: o.cost ? `${o.label} · ${fmt(o.cost)}` : o.label,
+      hint: `${o.hint}${o.cost && lots < 10 ? ` · ваша доля ≈ ${fmt(o.cost * lots / 10)}` : ""}`,
+      run: async () => {
+        const { r } = await this.exec(pid, { t: "crisisAnswer", id: c.id, choice: o.id });
+        if (!r.ok) this.toast(r.error ?? "Нельзя", "warn"); else this.toast(`Решение: ${o.label}`, "good");
+        void this.step();
+      },
+    }));
+  }
+
+  /** На одном телефоне: в начале хода — неприятности, где ждут ответа этого игрока. */
+  private async pendingCrises(pid: number) {
+    for (const c of [...(this.s.crises ?? [])]) if (c.owners.includes(pid) && c.answers[pid] === undefined) await this.crisisCall(pid, c.id, undefined, true);
+  }
+
   /** «Входящие»: пропущенные и прослушанные звонки, предложения можно принять и здесь. */
   private showInbox() {
     const s = this.s, me = this.meId, pl = s.players[me];
@@ -1004,11 +1108,16 @@ export class App {
       const who = CALLERS[m.from];
       const handlers = this.offerHandlers(me, m.offer);
       const row = h("div", { class: "row" });
-      if (handlers) {
+      const crisis = m.crisis !== undefined ? (s.crises ?? []).find((c) => c.id === m.crisis) : undefined;
+      if (m.crisis !== undefined) {
+        if (!crisis) row.append(h("span", { class: "muted tiny" }, "Уже решено — итог в сообщениях ниже"));
+        else if (crisis.answers[me] !== undefined) row.append(h("span", { class: "muted tiny" }, `Ваш ответ: ${crisis.options.find((o) => o.id === crisis.answers[me])?.label} — ждём остальных владельцев`));
+        else for (const ch of this.crisisChoices(me, crisis)) row.append(button(ch.label, () => { void ch.run().then(() => this.showInbox()); }, "small"));
+      } else if (handlers) {
         row.append(button("Принять", () => { void handlers.accept().then((err) => { if (err) this.toast(err, "warn"); else this.toast("Сделка состоялась", "good"); this.showInbox(); }); }, "primary"),
           button("Отказать", () => { void handlers.decline().then(() => this.showInbox()); }));
       } else if (m.offer !== undefined) row.append(h("span", { class: "muted tiny" }, "Предложение уже неактуально"));
-      row.append(button("▶ Прослушать", () => {
+      if (m.crisis === undefined) row.append(button("▶ Прослушать", () => {
         this.markRead(me, m.id);
         this.closeModal();
         this.calling = true;
@@ -1167,7 +1276,7 @@ export class App {
       if (listed) row.append(button(`Снять с продажи (${listed * 10}%)`, () => run({ t: "unlistShares", cell: i }), myTurn ? "ghost" : "ghost disabled"));
       sections.push(h("div", { class: "item" },
         h("div", { class: "item-head" }, h("b", {}, BOARD[i].name), h("span", { class: "muted" }, ` · у вас ${ownerLots(p) * 10}% · компания ${fmt(companyValue(s, i))}`), trend(i)),
-        h("div", { class: "muted tiny" }, soldLots(p) ? `Акционеры: ${holders}. Они получают свою долю аренды и дохода.` : "Акционеров нет — вся аренда ваша. Можно продать до 40%."),
+        h("div", { class: "muted tiny" }, soldLots(p) ? `Акционеры: ${holders}. Они получают свою долю аренды и дохода.` : "Акционеров нет — вся аренда ваша. Продать можно хоть всё, но больше 50% — это контроль: кто соберёт больше вас, тот и управляет."),
         row));
     }
 
@@ -1209,7 +1318,8 @@ export class App {
         : "Покупать и выставлять акции можно в свой ход — до броска или в конце хода. Принять предложение можно в любой момент."),
       h("div", { class: "perks" }, h("b", {}, "Зачем продавать акции: "),
         "деньги сразу, без залога; за каждые 10% у акционеров — аренда +5%, стройка дешевле на 5% и быстрее на 10%; ",
-        `с ${PUBLIC_PROTECT_LOTS * 10}% у акционеров компанию нельзя отнять «Слиянием»; каждый новый уровень поднимает цену акций на 10%.`),
+        `с ${PUBLIC_PROTECT_LOTS * 10}% у акционеров компанию нельзя отнять «Слиянием»; каждый новый уровень поднимает цену акций на 10%. `,
+        h("b", {}, "Контроль: "), "у кого больше 50% — решает один; меньше — стройка, снос, реклама, залог и защита решаются голосованием долей. Кто собрал больше всех — тот управляет."),
       ...sections);
     this.modal.dataset.view = "exchange";
     const sheet = this.modal.querySelector(".sheet");
@@ -1390,6 +1500,9 @@ export class App {
         "Не хватает на покупку — «💰 Найти деньги» на карточке: снять со вклада, взять кредит, заложить клетку, продать роскошь.",
         "Не вернули кредит — банк выставляет залог на аукцион: компанию целиком (с постройками), акции — по 10%, пока не покроет долг. Что выручено сверх долга — ваше.",
         "Партия на одном телефоне сохраняется после каждого хода: в меню — «Продолжить партию» или новая игра.",
+        "Акции можно продавать хоть все. Управляет крупнейший акционер; у кого больше 50% — решает сам, иначе стройка, снос, реклама, залог и защита — голосованием долей.",
+        "Реализм (настраивается перед партией): проверки, забастовки, пожары, санкции и другие ЧП случаются в любой момент — владельцам звонят, на решение 30 секунд. Расходы делятся по долям.",
+        "Защита компании: охрана (от рейдеров), юрист (меньше нарушений), страховка (ремонт после ЧП бесплатно). Конкуренту можно заказать рейдерский захват или проверку — но могут завести дело.",
         "Банк и биржа звонят: предложения по акциям, напоминание о кредите, продажа залога. Ответьте — сотрудник всё расскажет, можно сразу принять или отказать. Отклонили или прервали — сообщение ждёт во «📨 Входящих».",
         "Игра по Bluetooth: если телефон хозяина стола вышел, хозяином становится следующий телефон, остальные переподключаются сами, а за ушедшего играет бот, пока он не вернётся через «Найти стол».",
         "Вклад в банке: 2% за каждый ваш ход, снять можно в любой свой ход, при нехватке на платёж банк снимет сам.",

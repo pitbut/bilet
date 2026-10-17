@@ -5,6 +5,9 @@ import { sfx } from "./sound";
 export const CALLERS: Record<Caller, { name: string; org: string; suit: string; hair: string; bg: [string, string]; woman: boolean }> = {
   bank: { name: "Ирина Соколова", org: "Банк «Олигарх» · менеджер по кредитам", suit: "#1f3a5f", hair: "#3b2416", bg: ["#d9c9a3", "#a8916a"], woman: true },
   exchange: { name: "Аркадий Биржевой", org: "Московская биржа · брокер", suit: "#2b2f36", hair: "#6b6f75", bg: ["#0f2a1f", "#0a1912"], woman: false },
+  lawyer: { name: "Олег Законов", org: "Юридическая служба · юрист компании", suit: "#3a3a3a", hair: "#1e1e1e", bg: ["#e8e2d4", "#b9ad94"], woman: false },
+  union: { name: "Николай Рабочев", org: "Профсоюз предприятия · председатель", suit: "#5a4632", hair: "#8a8a8a", bg: ["#7d8a96", "#4b5660"], woman: false },
+  emergency: { name: "Светлана Спасова", org: "Диспетчерская ЧС · дежурная", suit: "#e0662a", hair: "#c79a5b", bg: ["#2c3e50", "#1a252f"], woman: true },
 };
 
 // ---------- Голос: нативный синтез в Android, Web Speech в браузере ----------
@@ -70,6 +73,23 @@ function drawPerson(c: CanvasRenderingContext2D, w: number, h: number, who: Call
     for (let k = 0; k < 4; k++) c.fillRect(w * (0.08 + k * 0.26), h * 0.08, w * 0.07, h * 0.7);
     c.fillStyle = "#8b6b2e"; c.font = `700 ${Math.round(h * 0.06)}px Georgia, serif`; c.textAlign = "center";
     c.fillText("БАНК «ОЛИГАРХ»", w / 2, h * 0.17);
+  } else if (who === "lawyer") { // книжные полки
+    for (let r = 0; r < 4; r++) {
+      c.fillStyle = "#7a5531"; c.fillRect(0, h * (0.12 + r * 0.2), w, h * 0.015);
+      for (let k = 0; k < 30; k++) { c.fillStyle = ["#8b1e1e", "#1f3a5f", "#2e7d32", "#6b4f1d"][(k + r) % 4]; c.fillRect(w * (k / 30), h * (0.135 + r * 0.2), w / 34, h * 0.13); }
+    }
+  } else if (who === "union") { // цех и плакат
+    c.fillStyle = "rgba(0,0,0,.25)";
+    for (let k = 0; k < 5; k++) c.fillRect(w * (0.05 + k * 0.2), h * 0.25, w * 0.12, h * 0.6);
+    c.fillStyle = "#c0392b"; c.fillRect(w * 0.08, h * 0.08, w * 0.84, h * 0.12);
+    c.fillStyle = "#fff"; c.font = `800 ${Math.round(h * 0.06)}px system-ui`; c.textAlign = "center";
+    c.fillText("ДОСТОЙНУЮ ЗАРПЛАТУ!", w / 2, h * 0.165);
+  } else if (who === "emergency") { // мигалка
+    const on = Math.sin(t * 8) > 0;
+    c.fillStyle = on ? "rgba(255,40,40,.35)" : "rgba(40,120,255,.3)";
+    c.fillRect(0, 0, w, h);
+    c.fillStyle = "#fff"; c.font = `800 ${Math.round(h * 0.06)}px system-ui`; c.textAlign = "center";
+    c.fillText("ДИСПЕТЧЕРСКАЯ ЧС", w / 2, h * 0.17);
   } else {
     c.lineWidth = Math.max(2, w / 300);
     for (let k = 0; k < 3; k++) {
@@ -146,10 +166,14 @@ export interface CallOptions {
   noRing?: boolean;
   /** Есть предложение — в звонке кнопки «Принять / Отказать». */
   offer?: { accept: () => Promise<string | null>; decline: () => Promise<void> };
+  /** Варианты решения (неприятности компании). */
+  choices?: { label: string; hint?: string; run: () => Promise<void> }[];
+  /** Время на решение в секундах — потом звонок заканчивается сам. */
+  timeLimit?: number;
 }
 
 /** Результат: answered — выслушал до конца; dropped — прервал; declined/missed — не ответил (сообщение во «Входящих»). */
-export type CallResult = "answered" | "dropped" | "declined" | "missed" | "accepted" | "rejected";
+export type CallResult = "answered" | "dropped" | "declined" | "missed" | "accepted" | "rejected" | "chosen" | "timeout";
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = "", text = "") => { const e = document.createElement(tag); if (cls) e.className = cls; if (text) e.textContent = text; return e; };
 
@@ -161,9 +185,11 @@ export function showCall(host: HTMLElement, o: CallOptions): Promise<CallResult>
   const vibrate = (p: number | number[]) => { try { navigator.vibrate?.(p); } catch { /* нет вибро */ } };
   return new Promise((resolve) => {
     let finished = false;
+    let countdown = 0;
     const finish = (r: CallResult) => {
       if (finished) return;
       finished = true;
+      clearInterval(countdown);
       clearInterval(ringTimer);
       vibrate(0);
       stopSpeech();
@@ -173,6 +199,12 @@ export function showCall(host: HTMLElement, o: CallOptions): Promise<CallResult>
       resolve(r);
     };
     let raf = 0;
+    const tStart = performance.now();
+    const left = () => (o.timeLimit ? Math.max(0, Math.ceil(o.timeLimit - (performance.now() - tStart) / 1000)) : null);
+    if (o.timeLimit) countdown = window.setInterval(() => {
+      for (const n of root.querySelectorAll(".calltimer")) n.textContent = `⏱ ${left()} с на решение`;
+      if (left() === 0) { clearInterval(countdown); finish("timeout"); }
+    }, 250);
 
     // 1) входящий вызов
     const ringing = () => {
@@ -187,12 +219,13 @@ export function showCall(host: HTMLElement, o: CallOptions): Promise<CallResult>
       btns.append(cap(no, "Отклонить"), cap(yes, "Ответить"));
       no.onclick = () => finish("declined");
       yes.onclick = () => talk();
-      box.append(btns, el("div", "ringhint", "Отклоните — сообщение останется во «📨 Входящих»"));
+      box.append(btns, el("div", "ringhint", o.choices ? "Не ответите вовремя — решение примут без вас (по умолчанию «ничего не делать»)" : "Отклоните — сообщение останется во «📨 Входящих»"));
+      if (o.timeLimit) box.append(el("div", "calltimer", `⏱ ${left()} с на решение`));
       root.append(box);
       const ring = () => { sfx.ring(); vibrate([400, 200, 400]); };
       ring();
       ringTimer = window.setInterval(ring, 2200);
-      setTimeout(() => { if (!talking) finish("missed"); }, 20000);
+      if (!o.timeLimit) setTimeout(() => { if (!talking) finish("missed"); }, 20000);
     };
 
     // 2) разговор
@@ -208,6 +241,7 @@ export function showCall(host: HTMLElement, o: CallOptions): Promise<CallResult>
       const top = el("div", "videotop");
       const timer = el("span", "", "00:00");
       top.append(el("b", "", who.name), el("span", "muted", ` · ${who.org.split(" · ")[0]} · `), timer);
+      if (o.timeLimit) top.append(el("span", "calltimer", ` ⏱ ${left()} с`));
       const self = el("div", "selfcam");
       self.style.background = o.playerColor;
       self.textContent = o.playerName.slice(0, 1).toUpperCase();
@@ -219,7 +253,17 @@ export function showCall(host: HTMLElement, o: CallOptions): Promise<CallResult>
       end.title = "Завершить";
       const endWrap = el("div", "capbtn"); endWrap.append(end, el("div", "", "Завершить"));
       end.onclick = () => finish(spoken ? "answered" : "dropped");
-      if (o.offer) {
+      if (o.choices) {
+        const box = el("div", "callchoices");
+        for (const ch of o.choices) {
+          const b = el("button", "choice");
+          b.append(el("b", "", ch.label), ...(ch.hint ? [el("small", "", ch.hint)] : []));
+          b.onclick = async () => { stopSpeech(); await ch.run(); finish("chosen"); };
+          box.append(b);
+        }
+        video.append(box);
+        btns.append(endWrap);
+      } else if (o.offer) {
         const acc = el("button", "primary", "Принять");
         const rej = el("button", "", "Отказать");
         acc.onclick = async () => { stopSpeech(); const err = await o.offer!.accept(); if (err) { subs.textContent = err; setTimeout(() => finish("answered"), 1800); } else finish("accepted"); };
@@ -258,7 +302,7 @@ export function showCall(host: HTMLElement, o: CallOptions): Promise<CallResult>
         if (finished) return;
         spoken = true; mouthOn = false;
         said.textContent = o.text; rest.textContent = "";
-        if (!o.offer) setTimeout(() => finish("answered"), 2500);
+        if (!o.offer && !o.choices) setTimeout(() => finish("answered"), 2500);
       });
     };
     if (o.noRing) talk(); else ringing();

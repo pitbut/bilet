@@ -28,7 +28,11 @@ export interface GameConfig {
   startMoney?: number;
   /** Раздать каждому по случайному предприятию на старте (ускоряет партию). */
   startCompanies?: boolean;
+  /** Реализм: проверки, рейдеры, забастовки, форс-мажоры. По умолчанию «умеренно». */
+  realism?: Realism;
 }
+
+export type Realism = "off" | "normal" | "hard";
 
 export interface Player extends PlayerConfig {
   id: number;
@@ -62,10 +66,32 @@ export interface Player extends PlayerConfig {
   inbox?: Message[];
   /** Раунд, когда последний раз брал бонус за рекламу. */
   adRound?: number;
+  /** Раунд последнего заказа рейдеров или проверки. */
+  orderRound?: number;
 }
 
-export type Caller = "bank" | "exchange";
-export interface Message { id: number; from: Caller; text: string; round: number; offer?: number; read?: boolean }
+export type Caller = "bank" | "exchange" | "lawyer" | "union" | "emergency";
+export interface Message { id: number; from: Caller; text: string; round: number; offer?: number; crisis?: number; read?: boolean }
+
+export type CrisisKind = "raid" | "inspection" | "strike" | "disaster";
+export interface CrisisOption { id: string; label: string; cost: number; hint: string }
+/** Неприятность у компании: всем владельцам звонят, у них есть время выбрать ответ. */
+export interface Crisis {
+  id: number;
+  kind: CrisisKind;
+  cell: number;
+  /** Кто заказал (рейдер или проверка), null — случайное событие. */
+  by: number | null;
+  title: string;
+  text: string;
+  options: CrisisOption[];
+  /** Кому решать: все владельцы долей. */
+  owners: number[];
+  answers: Record<number, string>;
+  /** После этого номера хода решается само (ответ по умолчанию — «ничего»). */
+  deadline: number;
+  sub?: string;
+}
 
 export type LuxKind = "car" | "mansion" | "yacht" | "painting";
 export type ExpKind = "party" | "vacation" | "gifts";
@@ -110,6 +136,18 @@ export interface Property {
   demand: number;
   /** Идущая рекламная кампания. */
   ad: Ad | null;
+  /** Охрана 0–3: защищает от рейдеров. */
+  guard?: number;
+  /** Юрист компании: меньше нарушений и шанс отбить захват. */
+  lawyer?: boolean;
+  /** Страховка компании действует до этого раунда включительно. */
+  insuredUntil?: number;
+  /** Простой: столько ходов владельца нет аренды и дохода. */
+  frozen?: number;
+  /** Были нарушения (штурмовая стройка без страховки) — проверка найдёт. */
+  unsafe?: boolean;
+  /** Раунд, когда последний раз поднимали зарплату (для профсоюза). */
+  wageRound?: number;
 }
 
 export interface MarketEvent {
@@ -150,7 +188,8 @@ export type GameEvent =
   | { type: "log"; text: string }
   | { type: "lux"; player: number; kind: LuxKind | ExpKind; text: string }
   | { type: "ad"; player: number; cell: number; kind: AdKind }
-  | { type: "call"; player: number; from: Caller; text: string; msg: number; offer?: number }
+  | { type: "call"; player: number; from: Caller; text: string; msg: number; offer?: number; crisis?: number }
+  | { type: "crisisDone"; id: number; cell: number; text: string; players: number[] }
   | { type: "gameover"; winner: number };
 
 export interface GameState {
@@ -174,6 +213,9 @@ export interface GameState {
   nextLoanId: number;
   nextLuxId: number;
   nextMsgId?: number;
+  /** Открытые неприятности компаний. */
+  crises?: Crisis[];
+  nextCrisisId?: number;
   /** Своя клетка, на которой игрок стоит в этот ход: строить можно только на ней. */
   landedOwn?: number | null;
   /** В этот ход уже строили (строить — один раз за ход). */
@@ -191,11 +233,11 @@ export type Action =
   | { t: "bid"; amount: number }
   | { t: "payRent" }
   | { t: "workOff" }
-  | { t: "build"; cell: number; branch?: BranchId; rush?: boolean; insure?: boolean }
+  | { t: "build"; cell: number; branch?: BranchId; rush?: boolean; insure?: boolean; approve?: number[] }
   | { t: "overtime"; cell: number }
   | { t: "takeover"; cell: number }
   | { t: "tap"; cell: number; n?: number }
-  | { t: "mortgage"; cell: number }
+  | { t: "mortgage"; cell: number; approve?: number[] }
   | { t: "unmortgage"; cell: number }
   | { t: "roulette"; choice: "red" | "black" | "even" | "odd" | number; amount: number }
   | { t: "slots"; amount: number }
@@ -211,7 +253,7 @@ export type Action =
   | { t: "offerShares"; cell: number; lots: number; to: number; price: number }
   | { t: "bidShares"; cell: number; lots: number; price: number }
   | { t: "buyCoop"; partners: CoopPart[] }
-  | { t: "takeLoan"; cell: number; kind: "company" | "shares"; amount: number }
+  | { t: "takeLoan"; cell: number; kind: "company" | "shares"; amount: number; approve?: number[] }
   | { t: "repayLoan"; id: number }
   | { t: "demolish"; cell: number; approve?: number[] }
   | { t: "deposit"; amount: number }
@@ -219,7 +261,7 @@ export type Action =
   | { t: "buyLux"; kind: LuxKind }
   | { t: "sellLux"; id: number }
   | { t: "experience"; kind: ExpKind }
-  | { t: "advertise"; cell: number; kind: AdKind }
+  | { t: "advertise"; cell: number; kind: AdKind; approve?: number[] }
   | { t: "bidCompany"; cell: number; price: number }
   | { t: "acceptOffer"; id: number }
   | { t: "declineOffer"; id: number }
@@ -228,6 +270,12 @@ export type Action =
   | { t: "rollDouble" }
   | { t: "stay" }
   | { t: "adReward" }
+  | { t: "crisisAnswer"; id: number; choice: string }
+  | { t: "orderRaid"; cell: number }
+  | { t: "orderInspection"; cell: number }
+  | { t: "guard"; cell: number; approve?: number[] }
+  | { t: "lawyer"; cell: number; approve?: number[] }
+  | { t: "insureCompany"; cell: number; approve?: number[] }
   | { t: "endTurn" };
 
 export interface Result { ok: boolean; error?: string; info?: string }
@@ -244,8 +292,6 @@ export const BRANCH_MULT: Record<BranchId, number[]> = { rent: [4, 10, 20], inco
 export const INCOME_SHARE = [0.04, 0.08, 0.15];
 export const TRANSPORT_RENT = [25, 50, 100, 200];
 export const MAX_CONSTRUCTIONS = 3;
-/** Снос при акционерах: нужно больше половины голосов (6 лотов из 10). */
-export const MAJORITY_LOTS = 6;
 /** Отработка: аренда на 10% меньше, но пропуск следующего хода. */
 export const WORKOFF_DISCOUNT = 0.1;
 export const RED_NUMBERS = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
@@ -365,7 +411,7 @@ function rentAtLevel(s: GameState, idx: number, level: number): number {
 
 export function rentFor(s: GameState, idx: number, diceSum = 7, withAd = true): number {
   const c = cell(idx), p = s.props[idx];
-  if (!p || p.owner === null || p.mortgaged) return 0;
+  if (!p || p.owner === null || p.mortgaged || (p.frozen ?? 0) > 0) return 0;
   let r: number;
   if (c.kind === "transport") {
     const n = [5, 15, 25, 35].filter((i) => owns(s, p.owner!, i)).length;
@@ -406,7 +452,10 @@ export const PUBLIC_BUILD_DISCOUNT = 0.05;
 export const PUBLIC_BUILD_SPEED = 0.1;
 /** С 20% у акционеров компанию нельзя забрать «Слиянием». */
 export const PUBLIC_PROTECT_LOTS = 2;
-export const OWNER_MIN_LOTS = 6; // владелец всегда держит не меньше 60%
+/** Контрольный пакет: больше половины (6 лотов из 10) — решает один, иначе голосование. */
+export const CONTROL_LOTS = 6;
+/** Сколько лотов бот-владелец оставляет себе, чтобы не потерять контроль. */
+export const OWNER_MIN_LOTS = CONTROL_LOTS;
 
 /** Стоимость компании: цена клетки и вложения × спрос на акции × рыночное событие. */
 export function companyValue(s: GameState, idx: number): number {
@@ -424,7 +473,7 @@ const listedBy = (p: Property, pid: number) => p.listings.filter((l) => l.seller
 export function freeLots(s: GameState, pid: number, idx: number): number {
   const p = s.props[idx];
   if (!p || p.owner === null) return 0;
-  if (p.owner === pid) return Math.max(0, ownerLots(p) - OWNER_MIN_LOTS - listedBy(p, pid));
+  if (p.owner === pid) return Math.max(0, ownerLots(p) - listedBy(p, pid)); // продать можно хоть всё
   if (s.players[pid].loans.some((l) => l.kind === "shares" && l.cell === idx)) return 0; // акции в залоге
   return Math.max(0, (p.holders[pid] ?? 0) - listedBy(p, pid));
 }
@@ -438,6 +487,45 @@ function clampDemand(p: Property) { p.demand = Math.min(3, Math.max(0.4, p.deman
 function moveLot(p: Property, from: number, to: number) {
   if (from !== p.owner) { p.holders[from] -= 1; if (p.holders[from] <= 0) delete p.holders[from]; }
   if (to !== p.owner) p.holders[to] = (p.holders[to] ?? 0) + 1;
+}
+
+/** Есть ли у управляющего контрольный пакет (больше 50%). */
+export const controlled = (p: Property) => ownerLots(p) >= CONTROL_LOTS;
+
+/** Лоты, которые бот-владелец может продать, не теряя контроль. */
+export function keepControlFree(s: GameState, pid: number, idx: number): number {
+  const p = s.props[idx];
+  if (p.owner !== pid) return freeLots(s, pid, idx);
+  return Math.max(0, Math.min(freeLots(s, pid, idx), ownerLots(p) - CONTROL_LOTS));
+}
+
+/** Управляет компанией крупнейший акционер. Перешла доля — пересчитываем, кто управляет. */
+function normalizeControl(s: GameState, idx: number) {
+  const p = s.props[idx];
+  if (!p || p.owner === null) return;
+  const own = ownerLots(p);
+  let best: number | null = null, bl = 0;
+  for (const [h, l] of Object.entries(p.holders)) if (l > bl || (l === bl && best !== null && +h < best)) { best = +h; bl = l; }
+  if (best === null || bl <= own) return;
+  const prev = p.owner, name = cell(idx).name;
+  if (own > 0) p.holders[prev] = own;
+  delete p.holders[best];
+  p.owner = best;
+  s.offers = s.offers.filter((o) => !(o.cell === idx && o.whole));
+  for (const l of s.players[prev].loans) if (l.cell === idx && l.kind === "company") l.kind = "shares"; // залог стал залогом акций
+  for (const l of s.players[best].loans) if (l.cell === idx && l.kind === "shares") l.kind = "company";
+  const pkg = bl >= CONTROL_LOTS ? `контрольный пакет ${bl * 10}%` : `крупнейшую долю ${bl * 10}%`;
+  stockEvent(s, `Смена управления: ${s.players[best].name} получает ${pkg} «${name}» и управляет компанией`, [prev, best]);
+  call(s, prev, "exchange", `Внимание! ${s.players[best].name} собрал ${pkg} компании «${name}» и теперь управляет ею. У вас остаётся ${own * 10} процентов — дивиденды по ним вы получаете как раньше.`);
+  call(s, best, "exchange", `Поздравляю! У вас ${pkg} компании «${name}» — теперь вы ею управляете.`);
+}
+
+/** Предупреждение владельцу, когда кто-то скупил 30% и больше. */
+function watchStake(s: GameState, idx: number, buyer: number, before: number) {
+  const p = s.props[idx];
+  if (p.owner === null || buyer === p.owner) return;
+  const now = p.holders[buyer] ?? 0;
+  if (before < 3 && now >= 3 && now < CONTROL_LOTS) call(s, p.owner, "exchange", `${s.players[buyer].name} скупил уже ${now * 10} процентов вашей компании «${cell(idx).name}». Если у него станет больше, чем у вас, — управление перейдёт к нему.`);
 }
 
 /** Делит деньги, только что полученные владельцем, между акционерами по долям. */
@@ -464,12 +552,20 @@ export function adRewardWait(s: GameState, pid: number): number {
 }
 
 /** Звонок человеку от банка или биржи: сообщение ложится во «Входящие». Ботам не звонят. */
-function call(s: GameState, pid: number, from: Caller, text: string, offer?: number) {
+function call(s: GameState, pid: number, from: Caller, text: string, offer?: number, crisis?: number) {
   const pl = s.players[pid];
   if (!pl || pl.bot || pl.bankrupt) return;
   const id = s.nextMsgId = (s.nextMsgId ?? 1) + 1;
-  pl.inbox = [...(pl.inbox ?? []), { id, from, text, round: s.round, offer }].slice(-40);
-  emit(s, { type: "call", player: pid, from, text, msg: id, offer });
+  pl.inbox = [...(pl.inbox ?? []), { id, from, text, round: s.round, offer, crisis }].slice(-40);
+  emit(s, { type: "call", player: pid, from, text, msg: id, offer, crisis });
+}
+
+/** Сообщение во «Входящие» без звонка (итог события). */
+function note(s: GameState, pid: number, from: Caller, text: string) {
+  const pl = s.players[pid];
+  if (!pl || pl.bot || pl.bankrupt) return;
+  const id = s.nextMsgId = (s.nextMsgId ?? 1) + 1;
+  pl.inbox = [...(pl.inbox ?? []), { id, from, text, round: s.round, read: false }].slice(-40);
 }
 
 function stockEvent(s: GameState, text: string, players: number[]) {
@@ -495,15 +591,18 @@ function buyLots(s: GameState, buyer: number, idx: number, lots: number): number
     if (!l) break;
     const price = lotPrice(s, idx);
     if (s.players[buyer].money < price) break;
+    const before = p.holders[buyer] ?? 0;
     give(s, buyer, -price, `акции «${cell(idx).name}»`);
     give(s, l.seller, price, `продажа акций «${cell(idx).name}»`);
     moveLot(p, l.seller, buyer);
+    watchStake(s, idx, buyer, before);
     l.lots -= 1;
     if (l.lots <= 0) p.listings.splice(p.listings.indexOf(l), 1);
     p.demand *= 1.06;
     clampDemand(p);
     bought++;
   }
+  normalizeControl(s, idx);
   return bought;
 }
 
@@ -526,10 +625,13 @@ function executeOffer(s: GameState, o: Offer): boolean {
   if (freeLots(s, seller, o.cell) < o.lots || s.players[buyer].money < o.price * o.lots) return false;
   give(s, buyer, -o.price * o.lots, `акции «${name}»`);
   give(s, seller, o.price * o.lots, `продажа акций «${name}»`);
+  const before = p.holders[buyer] ?? 0;
   for (let k = 0; k < o.lots; k++) moveLot(p, seller, buyer);
+  watchStake(s, o.cell, buyer, before);
   p.demand *= Math.pow(1.04, o.lots);
   clampDemand(p);
   stockEvent(s, `${s.players[buyer].name} покупает у ${s.players[seller].name} ${o.lots * 10}% «${name}» за ${o.price * o.lots}`, [seller, buyer]);
+  normalizeControl(s, o.cell);
   return true;
 }
 
@@ -538,7 +640,7 @@ export function botAsk(s: GameState, owner: number, idx: number, whole: boolean,
   const pl = s.players[owner], p = s.props[idx], c = cell(idx);
   const greed = { shark: 1.3, miser: 1.15, gambler: 1.0, trader: 1.1 }[pl.personality ?? "trader"];
   const poor = pl.money < 250 ? 0.85 : 1;
-  if (!whole) return freeLots(s, owner, idx) > 0 ? Math.round(lotPrice(s, idx) * (greed - 0.05) * poor * dealFactor(s, buyer)) : null;
+  if (!whole) return keepControlFree(s, owner, idx) > 0 ? Math.round(lotPrice(s, idx) * (greed - 0.05) * poor * dealFactor(s, buyer)) : null;
   let ask = companyValue(s, idx) * ownerLots(p) / LOTS + rentFor(s, idx) * 4;
   if (c.industry && hasMonopoly(s, owner, c.industry)) ask *= 2.2; // свою монополию просто так не отдаст
   if (c.industry && industryCells(c.industry).filter((i) => i !== idx).every((i) => owns(s, buyer, i))) ask *= 1.6; // покупателю она нужна для монополии
@@ -694,6 +796,11 @@ function serviceLife(s: GameState, pid: number) {
   for (const b of pl.buffs) b.rounds -= 1;
   pl.buffs = pl.buffs.filter((b) => b.rounds > 0);
   for (const [i, p] of Object.entries(s.props)) {
+    if (p.owner !== pid) continue;
+    if ((p.frozen ?? 0) > 0) p.frozen! -= 1;
+    if (p.lawyer && !charge(s, pid, LAWYER_UPKEEP, null, `юрист «${cell(+i).name}»`)) return;
+  }
+  for (const [i, p] of Object.entries(s.props)) {
     if (p.owner !== pid || !p.ad) continue;
     if (!p.mortgaged) {
       const sales = Math.round(rentFor(s, +i, 7, false) * AD[p.ad.kind].sales);
@@ -716,27 +823,285 @@ function updateLuxValues(s: GameState) {
   }
 }
 
-// ---------- Снос при акционерах ----------
+// ---------- Голосование акционеров ----------
 
-/** Голоса за снос: доля владельца + боты-акционеры (согласны, пока здание не максимальное) + люди из approve. */
-export function demolishVote(s: GameState, idx: number, approve: number[]): { yes: number; against: number[] } {
+/** Решения по компании: без контрольного пакета их принимают голосованием (больше 50% долей). */
+export type Decision = "build" | "demolish" | "advertise" | "mortgage" | "loan" | "guard" | "lawyer" | "insure";
+export const DECISION_NAME: Record<Decision, string> = {
+  build: "стройка", demolish: "снос построек", advertise: "реклама", mortgage: "залог компании",
+  loan: "кредит под компанию", guard: "охрана", lawyer: "юрист", insure: "страховка",
+};
+
+/** Как голосует бот-акционер: за всё, что повышает стоимость, против долгов. */
+function botVote(s: GameState, idx: number, d: Decision): boolean {
+  const p = s.props[idx];
+  if (d === "demolish") return p.level < 3;
+  if (d === "mortgage" || d === "loan") return false;
+  return true;
+}
+
+export function companyVote(s: GameState, idx: number, d: Decision, approve: number[]): { yes: number; against: number[] } {
   const p = s.props[idx];
   let yes = ownerLots(p);
   const against: number[] = [];
-  if (yes >= MAJORITY_LOTS) return { yes, against };
+  if (yes >= CONTROL_LOTS) return { yes, against };
   for (const [h, lots] of Object.entries(p.holders)) {
     const hid = +h;
-    const agree = s.players[hid].bot ? p.level < 3 : approve.includes(hid);
+    if (s.players[hid].bankrupt) continue;
+    const agree = s.players[hid].bot ? botVote(s, idx, d) : approve.includes(hid);
     if (agree) yes += lots; else against.push(hid);
   }
   return { yes, against };
 }
 
-/** Люди-акционеры, которых нужно спросить о сносе (пусто — владелец решает сам). */
-export function demolishAskList(s: GameState, idx: number): number[] {
+/** Проверка голосования: null — можно, иначе текст отказа. */
+function voteError(s: GameState, idx: number, d: Decision, approve: number[] | undefined): string | null {
+  const v = companyVote(s, idx, d, approve ?? []);
+  if (v.yes * 2 > LOTS) return null;
+  return `Акционеры против (${DECISION_NAME[d]}): «за» ${v.yes * 10}%, нужно больше 50%. Против: ${v.against.map((x) => s.players[x].name).join(", ")}`;
+}
+
+/** Люди-акционеры, которых нужно спросить (пусто — у управляющего контрольный пакет). */
+export function voteAskList(s: GameState, idx: number): number[] {
   const p = s.props[idx];
-  if (ownerLots(p) >= MAJORITY_LOTS) return [];
+  if (!p || ownerLots(p) >= CONTROL_LOTS) return [];
   return Object.keys(p.holders).map(Number).filter((h) => !s.players[h].bot && !s.players[h].bankrupt);
+}
+export const demolishAskList = voteAskList;
+
+// ---------- Реализм: рейдеры, проверки, забастовки, форс-мажоры ----------
+
+export const GUARD_COST = [80, 150, 250];
+export const LAWYER_UPKEEP = 15;
+export const INSURE_ROUNDS = 10;
+export const ORDER_COOLDOWN = 3;
+/** Сколько ходов (по всем игрокам) на ответ — потом решается само. */
+const crisisDeadline = (s: GameState) => s.turnCounter + Math.max(2, active(s).length);
+const realism = (s: GameState): Realism => s.cfg.realism ?? "normal";
+
+export const insureCost = (s: GameState, idx: number) => Math.max(30, Math.round(companyValue(s, idx) * 0.08));
+export const raidCost = (s: GameState, idx: number) => Math.max(80, Math.round(companyValue(s, idx) * 0.2));
+export const INSPECTION_COST = 80;
+export const isInsured = (s: GameState, idx: number) => (s.props[idx].insuredUntil ?? 0) >= s.round;
+
+/** Все, у кого есть доля: управляющий и акционеры. */
+function stakeholders(s: GameState, idx: number): number[] {
+  const p = s.props[idx];
+  if (p.owner === null) return [];
+  return [p.owner, ...Object.keys(p.holders).map(Number)].filter((x) => !s.players[x].bankrupt);
+}
+const stake = (p: Property, pid: number) => (pid === p.owner ? ownerLots(p) : p.holders[pid] ?? 0);
+
+/** Делит расход между владельцами по долям; кто не может — доплачивает управляющий. false — денег не хватило. */
+function splitCost(s: GameState, idx: number, cost: number, reason: string, receiver: number | null = null): boolean {
+  if (cost <= 0) return true;
+  const p = s.props[idx], who = stakeholders(s, idx);
+  const share = new Map(who.map((x) => [x, Math.min(s.players[x].money, Math.round(cost * stake(p, x) / LOTS))]));
+  let paid = [...share.values()].reduce((a, b) => a + b, 0);
+  const lack = cost - paid;
+  if (lack > 0 && p.owner !== null) {
+    const extra = Math.min(lack, s.players[p.owner].money - (share.get(p.owner) ?? 0));
+    share.set(p.owner, (share.get(p.owner) ?? 0) + Math.max(0, extra));
+    paid += Math.max(0, extra);
+  }
+  if (paid < cost) return false;
+  for (const [x, v] of share) if (v > 0) { give(s, x, -v, reason); if (receiver !== null) give(s, receiver, v, reason); }
+  return true;
+}
+
+const DISASTERS: { sub: string; text: string; fits: (c: Cell) => boolean }[] = [
+  { sub: "Пожар", text: "на предприятии пожар", fits: () => true },
+  { sub: "Наводнение", text: "паводок затопил территорию", fits: (c) => c.kind === "energy" || c.industry === "agro" || c.industry === "tourism" },
+  { sub: "Авария на трубопроводе", text: "прорыв трубы, выброс нефтепродуктов", fits: (c) => c.industry === "oil" || c.industry === "gas" },
+  { sub: "Санкции", text: "против отрасли ввели санкции, поставки встали", fits: (c) => ["finance", "metal", "oil", "gas", "auto"].includes(c.industry ?? "") },
+  { sub: "Кибератака", text: "хакеры положили серверы", fits: (c) => c.industry === "finance" || c.kind === "transport" },
+  { sub: "Засуха", text: "засуха погубила урожай", fits: (c) => c.industry === "agro" },
+  { sub: "Авария", text: "серьёзная авария, движение остановлено", fits: (c) => c.kind === "transport" },
+];
+
+function crisisOptions(s: GameState, kind: CrisisKind, idx: number, sub?: string): CrisisOption[] {
+  const p = s.props[idx], v = companyValue(s, idx), r = rentFor(s, idx, 7, false);
+  const nothing = (hint: string): CrisisOption => ({ id: "nothing", label: "Ничего не делать", cost: 0, hint });
+  if (kind === "raid") {
+    const g = p.guard ?? 0;
+    return [
+      { id: "lawyers", label: "Нанять юристов", cost: Math.max(40, Math.round(v * 0.12)), hint: "шанс захвата −35%" },
+      ...(g < 3 ? [{ id: "guard", label: "Срочно усилить охрану", cost: GUARD_COST[g], hint: `охрана ${g}→${g + 1} навсегда, шанс захвата −15%` }] : []),
+      { id: "payoff", label: "Откупиться", cost: Math.max(60, Math.round(v * 0.25)), hint: "рейдер уходит наверняка, деньги — ему" },
+      nothing("всё решит охрана и удача"),
+    ];
+  }
+  if (kind === "inspection") return [
+    { id: "docs", label: "Подготовить документы", cost: Math.max(30, Math.round(v * 0.05)), hint: "шанс нарушений вдвое меньше" },
+    nothing("если нарушения есть — найдут"),
+  ];
+  if (kind === "strike") return [
+    { id: "wages", label: "Поднять зарплату", cost: Math.round(r * 2) + 20, hint: "забастовки не будет, 8 кругов спокойно" },
+    { id: "talks", label: "Переговоры", cost: 20, hint: "50% — договоритесь" },
+    nothing("простой: аренды и дохода нет 2 хода"),
+  ];
+  const repair = isInsured(s, idx) ? 0 : Math.max(30, Math.round((p.level ? p.invested / p.level : (cell(idx).price ?? 0)) * 0.3));
+  return [
+    { id: "repair", label: sub === "Санкции" ? "Перестроить поставки" : "Срочный ремонт", cost: repair, hint: `${isInsured(s, idx) ? "оплатит страховка; " : ""}простой 1 ход, постройки целы` },
+    nothing(p.level ? "минус один уровень здания" : "простой 2 хода"),
+  ];
+}
+
+const CRISIS_CALLER: Record<CrisisKind, Caller> = { raid: "lawyer", inspection: "lawyer", strike: "union", disaster: "emergency" };
+
+/** Создаёт неприятность и звонит всем владельцам. */
+function startCrisis(s: GameState, kind: CrisisKind, idx: number, by: number | null, sub?: string) {
+  const p = s.props[idx];
+  if (p.owner === null || (s.crises ?? []).some((c) => c.cell === idx)) return;
+  const name = cell(idx).name;
+  const dis = sub ? DISASTERS.find((d) => d.sub === sub) : undefined;
+  const title = kind === "raid" ? `Рейдерский захват «${name}»` : kind === "inspection" ? `Проверка «${name}»` : kind === "strike" ? `Забастовка на «${name}»` : `${sub}: «${name}»`;
+  const text = kind === "raid"
+    ? `Срочно! На компанию «${name}» начался рейдерский захват${by !== null ? " — за ним стоит конкурент" : ""}. Охрана — уровень ${p.guard ?? 0}. Что делаем?`
+    : kind === "inspection"
+      ? `${by !== null ? "Кто-то заказал" : "Пришла"} проверку на «${name}»: налоговая, пожарные и трудинспекция. ${p.unsafe ? "Есть риск: была штурмовая стройка без страховки. " : ""}Что делаем?`
+      : kind === "strike"
+        ? `Профсоюз «${name}» объявляет забастовку: рабочие требуют поднять зарплату. Если не договоримся — предприятие встанет. Ваше решение?`
+        : `Чрезвычайная ситуация на «${name}»: ${dis?.text ?? "авария"}. ${isInsured(s, idx) ? "Компания застрахована — ремонт оплатит страховка. " : ""}Что делаем?`;
+  const c: Crisis = { id: s.nextCrisisId = (s.nextCrisisId ?? 0) + 1, kind, cell: idx, by, title, text, options: crisisOptions(s, kind, idx, sub), owners: stakeholders(s, idx), answers: {}, deadline: crisisDeadline(s), sub };
+  (s.crises ??= []).push(c);
+  stockEvent(s, `⚠ ${title}`, c.owners);
+  for (const o of c.owners) {
+    if (s.players[o].bot) c.answers[o] = botCrisisAnswer(s, c, o);
+    else call(s, o, CRISIS_CALLER[kind], text, undefined, c.id);
+  }
+  if (c.owners.every((o) => c.answers[o] !== undefined)) resolveCrisis(s, c);
+}
+
+/** Как отвечает бот-владелец: защищается, если хватает денег. */
+function botCrisisAnswer(s: GameState, c: Crisis, pid: number): string {
+  const pl = s.players[pid], p = s.props[c.cell];
+  const can = (id: string) => { const o = c.options.find((x) => x.id === id); return o && pl.money - o.cost * stake(p, pid) / LOTS > 200 ? id : null; };
+  if (c.kind === "raid") return can("lawyers") ?? can("guard") ?? "nothing";
+  if (c.kind === "inspection") return (p.unsafe || p.ad) ? can("docs") ?? "nothing" : "nothing";
+  if (c.kind === "strike") return can("wages") ?? "talks";
+  return can("repair") ?? "nothing";
+}
+
+/** Решение: у кого контрольный пакет — тот и решает; иначе вариант, за который больше долей. */
+function crisisChoice(s: GameState, c: Crisis): string {
+  const p = s.props[c.cell];
+  if (p.owner !== null && controlled(p)) return c.answers[p.owner] ?? "nothing";
+  const w = new Map<string, number>();
+  for (const o of c.owners) { const a = c.answers[o] ?? "nothing"; w.set(a, (w.get(a) ?? 0) + stake(p, o)); }
+  const lead = p.owner !== null ? c.answers[p.owner] ?? "nothing" : "nothing";
+  return [...w.entries()].sort((a, b) => b[1] - a[1] || Number(b[0] === lead) - Number(a[0] === lead))[0]?.[0] ?? "nothing";
+}
+
+function resolveCrisis(s: GameState, c: Crisis) {
+  s.crises = (s.crises ?? []).filter((x) => x !== c);
+  const p = s.props[c.cell], name = cell(c.cell).name;
+  if (p.owner === null) return;
+  let choice = crisisChoice(s, c);
+  const opt = c.options.find((o) => o.id === choice);
+  if (opt && opt.cost > 0) {
+    const receiver = choice === "payoff" ? c.by : null;
+    if (!splitCost(s, c.cell, opt.cost, `${c.title}: ${opt.label.toLowerCase()}`, receiver)) choice = "nothing"; // не хватило денег
+  }
+  let result = "";
+  if (c.kind === "raid") {
+    if (choice === "guard") p.guard = Math.min(3, (p.guard ?? 0) + 1);
+    if (choice === "payoff") result = "откупились — рейдеры ушли";
+    else {
+      let chance = 0.55 - 0.12 * (p.guard ?? 0) - (choice === "lawyers" ? 0.35 : 0) - (choice === "guard" ? 0.15 : 0) - (p.lawyer ? 0.1 : 0) - (controlled(p) ? 0.1 : 0);
+      chance = Math.min(0.85, Math.max(0.05, chance));
+      if (c.by !== null && rand(s) < chance && !s.players[c.by].bankrupt && p.owner !== c.by) {
+        const prev = p.owner;
+        delete p.holders[c.by];
+        p.owner = c.by; // рейдер забирает долю управляющего
+        p.listings = p.listings.filter((l) => l.seller !== prev);
+        s.offers = s.offers.filter((o) => o.cell !== c.cell);
+        for (const l of s.players[prev].loans) if (l.cell === c.cell && l.kind === "company") l.kind = "shares";
+        emit(s, { type: "buy", player: c.by, cell: c.cell });
+        result = `захват удался: управление у ${s.players[c.by].name}`;
+        normalizeControl(s, c.cell);
+      } else {
+        result = "захват отбит";
+        if (c.by !== null && rand(s) < 0.5) { // рейдер попался
+          const raider = s.players[c.by];
+          charge(s, c.by, 100, null, "штраф: уголовное дело о рейдерстве");
+          raider.skipNext = true;
+          result += `, на ${raider.name} завели дело: штраф 100 и пропуск хода`;
+          note(s, c.by, "lawyer", `Захват «${name}» провалился, на вас завели уголовное дело: штраф 100 и пропуск хода.`);
+        } else if (c.by !== null) note(s, c.by, "lawyer", `Захват «${name}» отбит. Деньги на рейдеров потрачены зря.`);
+      }
+    }
+  } else if (c.kind === "inspection") {
+    let risk = 0.15 + (c.by !== null ? 0.15 : 0) + (p.unsafe ? 0.3 : 0) + (p.ad ? 0.1 : 0) + 0.05 * p.level - (p.lawyer ? 0.25 : 0);
+    if (choice === "docs") risk /= 2;
+    risk = Math.min(0.9, Math.max(0.03, risk));
+    if (rand(s) < risk) {
+      const roll = rand(s), v = companyValue(s, c.cell);
+      if (roll < 0.5) { const f = Math.max(30, Math.round(v * 0.08)); splitCost(s, c.cell, Math.min(f, stakeholders(s, c.cell).reduce((a, x) => a + s.players[x].money, 0)), `штраф по проверке «${name}»`); result = `нашли нарушения — штраф ${f}`; }
+      else if (roll < 0.8) { const f = Math.max(60, Math.round(v * 0.15)); splitCost(s, c.cell, Math.min(f, stakeholders(s, c.cell).reduce((a, x) => a + s.players[x].money, 0)), `крупный штраф по проверке «${name}»`); result = `серьёзные нарушения — штраф ${f}`; }
+      else { p.frozen = Math.max(p.frozen ?? 0, 2); result = "работа приостановлена на 2 хода"; }
+    } else result = "проверка ничего не нашла";
+    p.unsafe = false;
+    if (c.by !== null) note(s, c.by, "lawyer", `Проверка «${name}», которую вы заказали: ${result}.`);
+  } else if (c.kind === "strike") {
+    if (choice === "wages") { p.wageRound = s.round; result = "зарплату подняли — люди вернулись к работе"; }
+    else if (choice === "talks" && rand(s) < 0.5) { p.wageRound = s.round; result = "договорились на переговорах"; }
+    else { p.frozen = Math.max(p.frozen ?? 0, 2); p.wageRound = s.round; result = "забастовка: простой 2 хода"; }
+  } else {
+    if (choice === "repair") { p.frozen = Math.max(p.frozen ?? 0, 1); result = isInsured(s, c.cell) ? "страховка оплатила ремонт, простой 1 ход" : "срочный ремонт, простой 1 ход"; }
+    else if (p.level > 0 && c.sub !== "Санкции") {
+      p.invested -= Math.round(p.invested / p.level);
+      p.level -= 1;
+      p.construction = null; // стройка на разрушенном объекте тоже погибла
+      if (p.level === 0) { p.branch = null; p.invested = 0; }
+      result = `здание разрушено до уровня ${p.level}`;
+    } else { p.frozen = Math.max(p.frozen ?? 0, 2); result = "простой 2 хода"; }
+  }
+  const players = [...new Set([...c.owners, ...(c.by !== null ? [c.by] : [])])];
+  stockEvent(s, `${c.title}: ${result}`, players);
+  for (const o of c.owners) note(s, o, CRISIS_CALLER[c.kind], `${c.title}: ${result}.`);
+  emit(s, { type: "crisisDone", id: c.id, cell: c.cell, text: `${c.title}: ${result}`, players });
+}
+
+/** Случайное событие в начале круга. */
+function randomCrisis(s: GameState) {
+  const r = realism(s);
+  if (r === "off" || s.round < 3) return;
+  if (rand(s) > (r === "hard" ? 0.8 : 0.45)) return;
+  const owned = Object.keys(s.props).map(Number).filter((i) => s.props[i].owner !== null && !s.players[s.props[i].owner!].bankrupt && !(s.crises ?? []).some((c) => c.cell === i));
+  if (!owned.length) return;
+  const idx = owned[randInt(s, owned.length)], p = s.props[idx], c = cell(idx);
+  const roll = rand(s);
+  if (roll < 0.35) startCrisis(s, "inspection", idx, null);
+  else if (roll < 0.6 && c.kind === "business" && p.level >= 2 && s.round - (p.wageRound ?? 0) >= 8) startCrisis(s, "strike", idx, null);
+  else {
+    const fit = DISASTERS.filter((d) => d.fits(c));
+    startCrisis(s, "disaster", idx, null, fit[randInt(s, fit.length)].sub);
+  }
+}
+
+/** Можно ли заказать рейдеров или проверку на эту компанию. */
+export function canOrder(s: GameState, pid: number, idx: number, kind: "raid" | "inspection"): { ok: boolean; reason?: string; cost?: number } {
+  const p = s.props[idx], pl = s.players[pid];
+  if (realism(s) === "off") return { ok: false, reason: "Реализм выключен в настройках партии" };
+  if (!p || p.owner === null) return { ok: false, reason: "У компании нет владельца" };
+  if (p.owner === pid) return { ok: false, reason: "Это ваша компания" };
+  if ((s.crises ?? []).some((c) => c.cell === idx)) return { ok: false, reason: "У компании уже неприятности" };
+  if (pl.orderRound !== undefined && s.round - pl.orderRound < ORDER_COOLDOWN) return { ok: false, reason: `Снова можно через ${ORDER_COOLDOWN - (s.round - pl.orderRound)} р.` };
+  const cost = kind === "raid" ? raidCost(s, idx) : INSPECTION_COST;
+  if (pl.money < cost) return { ok: false, reason: `Нужно ${cost}`, cost };
+  return { ok: true, cost };
+}
+
+/** Ответ владельца на неприятность (в любой момент, не только в свой ход). */
+function answerCrisis(s: GameState, pid: number, id: number, choice: string): Result {
+  const c = (s.crises ?? []).find((x) => x.id === id);
+  if (!c) return { ok: false, error: "Уже решено" };
+  if (!c.owners.includes(pid)) return { ok: false, error: "Вы не владелец этой компании" };
+  if (!c.options.some((o) => o.id === choice)) return { ok: false, error: "Нет такого варианта" };
+  c.answers[pid] = choice;
+  if (c.owners.every((o) => c.answers[o] !== undefined || s.players[o].bankrupt)) resolveCrisis(s, c);
+  return { ok: true };
 }
 
 // ---------- Складчина ----------
@@ -924,7 +1289,7 @@ function continueTurn(s: GameState) {
   pl.trades = 0;
   // Доход веток «Доход», экспорта зерна и СПГ — с дивидендами акционерам.
   for (const [i, p] of Object.entries(s.props)) {
-    if (p.owner !== pl.id || p.mortgaged || p.level === 0) continue;
+    if (p.owner !== pl.id || p.mortgaged || p.level === 0 || (p.frozen ?? 0) > 0) continue;
     const c = cell(+i);
     let income = 0;
     if (p.branch === "income") income += (c.price ?? 0) * INCOME_SHARE[p.level - 1] * (s.market?.rent[c.industry!] ?? 1);
@@ -956,6 +1321,7 @@ function nextTurn(s: GameState) {
         clampDemand(p);
       }
       updateLuxValues(s);
+      randomCrisis(s);
       if (s.market) { s.market.roundsLeft -= 1; if (s.market.roundsLeft <= 0) s.market = null; }
       if (s.round % 3 === 0 && !s.market) {
         const ev = MARKET_EVENTS[randInt(s, MARKET_EVENTS.length)];
@@ -968,6 +1334,8 @@ function nextTurn(s: GameState) {
   } while (s.players[next].bankrupt);
   s.current = next;
   s.turnCounter += 1;
+  for (const c of [...(s.crises ?? [])]) if (c.deadline <= s.turnCounter) resolveCrisis(s, c);
+  if (s.phase === "gameover") return;
   startTurn(s);
 }
 
@@ -1185,7 +1553,7 @@ function resolveBankSale(s: GameState, b: BankSale, best: number | null, amount:
     if (b.kind === "company") {
       transferCompany(s, b.cell, best);
       emit(s, { type: "buy", player: best, cell: b.cell });
-    } else moveLot(p, b.debtor, best);
+    } else { moveLot(p, b.debtor, best); normalizeControl(s, b.cell); }
     stockEvent(s, `${s.players[best].name} покупает у банка ${b.kind === "company" ? `«${name}»` : `10% «${name}»`} за ${amount}${amount > toBank ? ` — ${debtor.name} получает остаток ${amount - toBank}` : ""}`, [best, b.debtor]);
   } else if (b.kind === "company") { // никто не купил — компания остаётся банку
     transferCompany(s, b.cell, null);
@@ -1439,6 +1807,7 @@ export function act(s: GameState, pid: number, a: Action): Result {
     tap(s, pid, a.cell, a.n ?? 1);
     return { ok: true };
   }
+  if (a.t === "crisisAnswer") return answerCrisis(s, pid, a.id, a.choice);
   // на аукционе участник может срочно добыть деньги: снять со вклада, взять кредит, заложить клетку, продать роскошь
   const bidder = s.phase === "auction" && s.pending?.kind === "auction" && s.pending.waiting.includes(pid);
   const raisingMoney = a.t === "withdraw" || a.t === "takeLoan" || a.t === "mortgage" || a.t === "sellLux" || a.t === "adReward";
@@ -1503,6 +1872,8 @@ export function act(s: GameState, pid: number, a: Action): Result {
       const chk = canBuild(s, pid, a.cell);
       if (!chk.ok) return { ok: false, error: chk.reason };
       const p = s.props[a.cell];
+      const ve = voteError(s, a.cell, "build", a.approve);
+      if (ve) return { ok: false, error: ve };
       if (chk.level === 1) {
         if (!a.branch) return { ok: false, error: "Выберите ветку" };
         p.branch = a.branch;
@@ -1519,6 +1890,7 @@ export function act(s: GameState, pid: number, a: Action): Result {
       const nominal = Math.ceil((BUILD_ROUNDS[chk.level! - 1] * opp) / (a.rush ? 2 : 1));
       s.builtThisTurn = true;
       p.construction = { target: chk.level!, progress: 0, rush: !!a.rush, insured: !!a.insure, accidentChecked: false, ticks: 0, nominalTicks: nominal };
+      if (a.rush && !a.insure) p.unsafe = true; // штурмовщина без страховки — нарушение ТБ
       emit(s, { type: "buildStart", player: pid, cell: a.cell, level: chk.level! });
       log(s, `${pl.name} начинает стройку уровня ${chk.level} в «${cell(a.cell).name}» за ${cost}`);
       return { ok: true };
@@ -1541,7 +1913,7 @@ export function act(s: GameState, pid: number, a: Action): Result {
       const parts = a.partners.filter((x) => x.lots > 0);
       const total = parts.reduce((t, x) => t + x.lots, 0);
       if (!parts.length) return { ok: false, error: "Выберите хотя бы одного партнёра" };
-      if (total > LOTS - OWNER_MIN_LOTS) return { ok: false, error: "Партнёрам — не больше 40%" };
+      if (total > LOTS - 1) return { ok: false, error: "Себе нужно оставить хотя бы 10%" };
       if (new Set(parts.map((x) => x.pid)).size !== parts.length || parts.some((x) => x.pid === pid || !s.players[x.pid] || s.players[x.pid].bankrupt)) return { ok: false, error: "Неверный список партнёров" };
       const shareOf = (x: CoopPart) => Math.ceil(price * x.lots / LOTS);
       const poor = parts.find((x) => s.players[x.pid].money < shareOf(x));
@@ -1557,6 +1929,7 @@ export function act(s: GameState, pid: number, a: Action): Result {
       for (const x of parts) { give(s, x.pid, -shareOf(x), `доля в «${c.name}»`); p.holders[x.pid] = x.lots; }
       emit(s, { type: "buy", player: pid, cell: idx });
       stockEvent(s, `${pl.name} покупает «${c.name}» в складчину: ${parts.map((x) => `${s.players[x.pid].name} ${x.lots * 10}%`).join(", ")}`, [pid, ...parts.map((x) => x.pid)]);
+      normalizeControl(s, idx);
       afterLanding(s, pid);
       return { ok: true };
     }
@@ -1574,8 +1947,8 @@ export function act(s: GameState, pid: number, a: Action): Result {
       if (a.t === "demolish") {
         const p = s.props[a.cell];
         if (!p || p.owner !== pid || p.level === 0 || p.construction) return { ok: false, error: "Сносить нечего" };
-        const vote = demolishVote(s, a.cell, a.approve ?? []);
-        if (vote.yes < MAJORITY_LOTS) return { ok: false, error: `Снос не одобрен: «за» ${vote.yes * 10}%, нужно больше 50%. Против: ${vote.against.map((x) => s.players[x].name).join(", ")}` };
+        const ve = voteError(s, a.cell, "demolish", a.approve);
+        if (ve) return { ok: false, error: ve };
         const refund = Math.round(p.invested / 2);
         give(s, pid, refund, `снос построек «${cell(a.cell).name}»`);
         shareOut(s, a.cell, refund, "снос"); // акционерам — их доля возврата
@@ -1587,6 +1960,7 @@ export function act(s: GameState, pid: number, a: Action): Result {
       const amount = Math.round(a.amount);
       if (!lim) return { ok: false, error: "Под это банк не даёт" };
       if (amount < 10 || amount > lim) return { ok: false, error: `Кредит от 10 до ${lim}` };
+      if (a.kind === "company") { const ve = voteError(s, a.cell, "loan", a.approve); if (ve) return { ok: false, error: ve }; }
       const l: Loan = { id: s.nextLoanId++, kind: a.kind, cell: a.cell, amount, due: s.round + LOAN_ROUNDS };
       pl.loans.push(l);
       give(s, pid, amount, `кредит под «${cell(a.cell).name}»`);
@@ -1652,6 +2026,8 @@ export function act(s: GameState, pid: number, a: Action): Result {
       if (!spec) return { ok: false, error: "Нет такой рекламы" };
       const cost = adCost(s, pid, a.cell, a.kind);
       if (pl.money < cost) return { ok: false, error: `Нужно ${cost}` };
+      const ve = voteError(s, a.cell, "advertise", a.approve);
+      if (ve) return { ok: false, error: ve };
       give(s, pid, -cost, `реклама «${cell(a.cell).name}»`);
       p.ad = { kind: a.kind, rounds: spec.rounds };
       p.demand *= spec.demand; clampDemand(p);
@@ -1745,6 +2121,8 @@ export function act(s: GameState, pid: number, a: Action): Result {
       if (!p || p.owner !== pid || p.mortgaged) return { ok: false, error: "Нельзя заложить" };
       if (p.level > 0 || p.construction) return { ok: false, error: "Сначала снесите постройки" };
       if (pl.loans.some((l) => l.kind === "company" && l.cell === a.cell)) return { ok: false, error: "Компания уже в залоге по кредиту" };
+      const ve = voteError(s, a.cell, "mortgage", a.approve);
+      if (ve) return { ok: false, error: ve };
       mortgage(s, pid, a.cell);
       return { ok: true };
     }
@@ -1799,6 +2177,42 @@ export function act(s: GameState, pid: number, a: Action): Result {
         log(s, `${pl.name} не выбросил дубль`);
         s.phase = "end";
       }
+      return { ok: true };
+    }
+    case "orderRaid": case "orderInspection": {
+      if (s.phase !== "roll" && s.phase !== "end") return { ok: false, error: "До броска или в конце хода" };
+      const kind = a.t === "orderRaid" ? "raid" : "inspection";
+      const chk = canOrder(s, pid, a.cell, kind);
+      if (!chk.ok) return { ok: false, error: chk.reason };
+      give(s, pid, -chk.cost!, kind === "raid" ? `рейдеры на «${cell(a.cell).name}»` : `проверка на «${cell(a.cell).name}»`);
+      pl.orderRound = s.round;
+      startCrisis(s, kind, a.cell, pid);
+      return { ok: true, info: kind === "raid" ? "Рейдеры выехали. Владельцам дано время на ответ." : "Проверка назначена." };
+    }
+    case "guard": case "lawyer": case "insureCompany": {
+      if (s.phase !== "roll" && s.phase !== "end") return { ok: false, error: "До броска или в конце хода" };
+      const p = s.props[a.cell];
+      if (!p || p.owner !== pid) return { ok: false, error: "Решает управляющий компанией" };
+      const d: Decision = a.t === "guard" ? "guard" : a.t === "lawyer" ? "lawyer" : "insure";
+      if (a.t === "lawyer" && p.lawyer) { p.lawyer = false; log(s, `${pl.name} увольняет юриста «${cell(a.cell).name}»`); return { ok: true }; }
+      const ve = voteError(s, a.cell, d, a.approve);
+      if (ve) return { ok: false, error: ve };
+      if (a.t === "guard") {
+        const g = p.guard ?? 0;
+        if (g >= 3) return { ok: false, error: "Охрана уже максимальная" };
+        if (pl.money < GUARD_COST[g]) return { ok: false, error: `Нужно ${GUARD_COST[g]}` };
+        give(s, pid, -GUARD_COST[g], `охрана «${cell(a.cell).name}»`);
+        p.guard = g + 1;
+      } else if (a.t === "lawyer") {
+        p.lawyer = true;
+      } else {
+        const cost = insureCost(s, a.cell);
+        if (isInsured(s, a.cell)) return { ok: false, error: `Застраховано до ${p.insuredUntil}-го раунда` };
+        if (pl.money < cost) return { ok: false, error: `Нужно ${cost}` };
+        give(s, pid, -cost, `страховка «${cell(a.cell).name}»`);
+        p.insuredUntil = s.round + INSURE_ROUNDS;
+      }
+      log(s, `${pl.name}: ${DECISION_NAME[d]} для «${cell(a.cell).name}»`);
       return { ok: true };
     }
     case "adReward": {
