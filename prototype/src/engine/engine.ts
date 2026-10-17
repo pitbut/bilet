@@ -251,7 +251,7 @@ export type Action =
   | { t: "unlistShares"; cell: number }
   | { t: "buyShares"; cell: number; lots: number }
   | { t: "offerShares"; cell: number; lots: number; to: number; price: number }
-  | { t: "bidShares"; cell: number; lots: number; price: number }
+  | { t: "bidShares"; cell: number; lots: number; price: number; seller?: number }
   | { t: "buyCoop"; partners: CoopPart[] }
   | { t: "takeLoan"; cell: number; kind: "company" | "shares"; amount: number; approve?: number[] }
   | { t: "repayLoan"; id: number }
@@ -636,11 +636,20 @@ function executeOffer(s: GameState, o: Offer): boolean {
 }
 
 /** Сколько бот-владелец хочет за компанию целиком (сумма) или за 10% (цена лота). */
-export function botAsk(s: GameState, owner: number, idx: number, whole: boolean, buyer: number): number | null {
+/** Наценка бота за продажу, после которой он теряет контрольный пакет. */
+export const CONTROL_PREMIUM = 1.6;
+
+export function botAsk(s: GameState, owner: number, idx: number, whole: boolean, buyer: number, lots = 1): number | null {
   const pl = s.players[owner], p = s.props[idx], c = cell(idx);
   const greed = { shark: 1.3, miser: 1.15, gambler: 1.0, trader: 1.1 }[pl.personality ?? "trader"];
   const poor = pl.money < 250 ? 0.85 : 1;
-  if (!whole) return keepControlFree(s, owner, idx) > 0 ? Math.round(lotPrice(s, idx) * (greed - 0.05) * poor * dealFactor(s, buyer)) : null;
+  if (!whole) {
+    if (freeLots(s, owner, idx) < lots) return null;
+    const base = lotPrice(s, idx) * (greed - 0.05) * poor * dealFactor(s, buyer);
+    // контроль бот отдаёт, но дорого: за всю сделку — наценка за контрольный пакет
+    const losesControl = p.owner === owner && lots > keepControlFree(s, owner, idx);
+    return Math.round(base * (losesControl ? CONTROL_PREMIUM : 1));
+  }
   let ask = companyValue(s, idx) * ownerLots(p) / LOTS + rentFor(s, idx) * 4;
   if (c.industry && hasMonopoly(s, owner, c.industry)) ask *= 2.2; // свою монополию просто так не отдаст
   if (c.industry && industryCells(c.industry).filter((i) => i !== idx).every((i) => owns(s, buyer, i))) ask *= 1.6; // покупателю она нужна для монополии
@@ -2039,28 +2048,32 @@ export function act(s: GameState, pid: number, a: Action): Result {
       if (s.phase !== "roll" && s.phase !== "end") return { ok: false, error: "Предложения — до броска или в конце хода" };
       const p = s.props[a.cell];
       if (!p || p.owner === null || p.owner === pid) return { ok: false, error: "Это не чужая компания" };
-      const owner = s.players[p.owner], name = cell(a.cell).name;
       const whole = a.t === "bidCompany";
+      // купить акции можно у любого акционера, компанию целиком — только у управляющего
+      const sellerId = !whole && a.t === "bidShares" && a.seller !== undefined ? a.seller : p.owner;
+      if (sellerId === pid) return { ok: false, error: "Это ваши акции" };
+      if (!s.players[sellerId] || s.players[sellerId].bankrupt || (sellerId !== p.owner && !p.holders[sellerId])) return { ok: false, error: "У этого игрока нет акций компании" };
+      const owner = s.players[sellerId], name = cell(a.cell).name;
       const lots = whole ? 0 : Math.max(1, Math.round(a.lots));
       const price = Math.max(1, Math.round(a.price));
       const total = whole ? price : price * lots;
       if (pl.money < total) return { ok: false, error: "Не хватает денег на такое предложение" };
-      if (!whole && freeLots(s, p.owner, a.cell) < lots) return { ok: false, error: `Владелец может продать не больше ${freeLots(s, p.owner, a.cell) * 10}%` };
-      if (s.offers.some((o) => o.from === pid && o.cell === a.cell && o.kind === "bid")) return { ok: false, error: "Предложение уже отправлено" };
-      const o: Offer = { id: s.nextOfferId++, kind: "bid", from: pid, to: p.owner, cell: a.cell, lots, price, whole };
+      if (!whole && freeLots(s, sellerId, a.cell) < lots) return { ok: false, error: `${owner.name} может продать не больше ${freeLots(s, sellerId, a.cell) * 10}%` };
+      if (s.offers.some((o) => o.from === pid && o.to === sellerId && o.cell === a.cell && o.kind === "bid")) return { ok: false, error: "Предложение уже отправлено" };
+      const o: Offer = { id: s.nextOfferId++, kind: "bid", from: pid, to: sellerId, cell: a.cell, lots, price, whole };
       pl.trades++;
       const what = whole ? `«${name}» целиком за ${total}` : `${lots * 10}% «${name}» за ${total}`;
       if (owner.bot) {
-        const ask = botAsk(s, p.owner, a.cell, whole, pid);
+        const ask = botAsk(s, sellerId, a.cell, whole, pid, lots);
         const askTotal = ask === null ? null : whole ? ask : ask * lots;
         if (askTotal !== null && total >= askTotal) { executeOffer(s, o); return { ok: true, info: `${owner.name} согласен!` }; }
         const info = askTotal === null ? `${owner.name} не продаёт` : `${owner.name} отказывается — хочет не меньше ${askTotal}`;
-        stockEvent(s, `${pl.name} предлагает ${owner.name} ${what} — ${info.replace(`${owner.name} `, "")}`, [pid, p.owner]);
+        stockEvent(s, `${pl.name} предлагает ${owner.name} ${what} — ${info.replace(`${owner.name} `, "")}`, [pid, sellerId]);
         return { ok: true, info };
       }
       s.offers.push(o);
-      stockEvent(s, `${pl.name} хочет купить у ${owner.name} ${what}`, [pid, p.owner]);
-      call(s, p.owner, "exchange", `${pl.name} хочет купить у вас ${what.replace(/«/g, "«").replace(" за ", " и предлагает ")} миллионов. Цена на бирже сейчас — ${whole ? Math.round(companyValue(s, a.cell) * ownerLots(p) / LOTS) : lotPrice(s, a.cell) * lots} миллионов. Принять предложение?`, o.id);
+      stockEvent(s, `${pl.name} хочет купить у ${owner.name} ${what}`, [pid, sellerId]);
+      call(s, sellerId, "exchange", `${pl.name} хочет купить у вас ${what.replace(/«/g, "«").replace(" за ", " и предлагает ")} миллионов. Цена на бирже сейчас — ${whole ? Math.round(companyValue(s, a.cell) * ownerLots(p) / LOTS) : lotPrice(s, a.cell) * lots} миллионов. Принять предложение?`, o.id);
       return { ok: true, info: `Предложение отправлено ${owner.name}` };
     }
     case "listShares": case "unlistShares": case "buyShares": case "offerShares": {

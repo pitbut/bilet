@@ -762,3 +762,36 @@ describe("реализм: рейдеры, проверки, ЧП", () => {
     expect(act(s, 0, { t: "orderRaid", cell: 39 }).ok).toBe(false);
   });
 });
+
+describe("покупка акций у любого акционера", () => {
+  it("бот продаёт контрольный пакет только с наценкой ×1,6", () => {
+    const s = game(2);
+    s.players[1].bot = true; s.players[1].personality = "gambler"; s.players[1].money = 1000;
+    s.props[39].owner = 1;
+    s.current = 0; s.phase = "end"; s.players[0].money = 5000;
+    const lp = lotPrice(s, 39);
+    // 4 лота бот отдаёт по обычной цене
+    expect(act(s, 0, { t: "bidShares", cell: 39, lots: 4, price: Math.ceil(lp * 0.96) }).info).toMatch(/согласен/);
+    expect(s.props[39].holders[0]).toBe(4);
+    // 2 лота дальше — бот теряет контроль: по обычной цене отказ, с наценкой — да
+    const lp2 = lotPrice(s, 39);
+    const r1 = act(s, 0, { t: "bidShares", cell: 39, lots: 2, price: Math.ceil(lp2 * 0.96) });
+    expect(r1.info).toMatch(/отказывается/);
+    expect(act(s, 0, { t: "bidShares", cell: 39, lots: 2, price: Math.ceil(lp2 * 0.96 * 1.6) + 1 }).info).toMatch(/согласен/);
+    expect(s.props[39].owner).toBe(0); // 60% у игрока — он управляет
+  });
+
+  it("предложение акционеру (не управляющему): ему звонят, он продаёт свою долю", () => {
+    const s = game(3);
+    s.props[39].owner = 1; s.props[39].holders = { 2: 3 };
+    s.current = 0; s.phase = "end";
+    const r = act(s, 0, { t: "bidShares", cell: 39, lots: 2, price: 50, seller: 2 });
+    expect(r.ok).toBe(true);
+    const o = s.offers[0];
+    expect(o.to).toBe(2);
+    expect(s.players[2].inbox?.some((m) => m.offer === o.id)).toBe(true);
+    expect(act(s, 2, { t: "acceptOffer", id: o.id }).ok).toBe(true);
+    expect(s.props[39].holders).toEqual({ 2: 1, 0: 2 });
+    expect(act(s, 0, { t: "bidShares", cell: 39, lots: 1, price: 50, seller: 0 }).ok).toBe(false);
+  });
+});

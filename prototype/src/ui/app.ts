@@ -611,7 +611,17 @@ export class App {
       this.showDeal(i, r.info ?? "Готово");
     };
     const whole = Object.assign(h("input", { type: "number", min: "1", step: "10", class: "price wide", id: "deal-whole" }), { value: String(Math.round(value * 1.3 / 10) * 10) });
-    const free = freeLots(s, p.owner, i);
+    // у кого можно купить: управляющий и любой акционер, кроме меня
+    const sellers = [p.owner, ...Object.keys(p.holders).map(Number)].filter((x) => x !== me && !s.players[x].bankrupt && freeLots(s, x, i) > 0);
+    const pick = this.dealSeller.get(i);
+    const seller = pick !== undefined && sellers.includes(pick) ? pick : sellers[0];
+    const free = seller === undefined ? 0 : freeLots(s, seller, i);
+    const sellerSel = h("select", { class: "who", id: "deal-seller" }, ...sellers.map((x) => {
+      const o = h("option", { value: String(x) }, `${s.players[x].name} — ${(x === p.owner ? ownerLots(p) : p.holders[x]) * 10}%`) as HTMLOptionElement;
+      if (x === seller) o.selected = true;
+      return o;
+    }));
+    sellerSel.addEventListener("change", () => { this.dealSeller.set(i, Number((sellerSel as HTMLSelectElement).value)); this.showDeal(i, reply); });
     const lots = h("select", { class: "who", id: "deal-lots" }, ...Array.from({ length: free }, (_, k) => Object.assign(h("option", { value: String(k + 1) }, `${(k + 1) * 10}%`))));
     const per = Object.assign(h("input", { type: "number", min: "1", step: "1", class: "price", id: "deal-per" }), { value: String(Math.round(lotPrice(s, i) * 1.1)) });
     const dis = myTurn ? "primary" : "primary disabled";
@@ -623,16 +633,43 @@ export class App {
       h("div", { class: "muted tiny" }, `Компания станет вашей вместе с постройками${soldLots(p) ? `; акционеры (${soldLots(p) * 10}%) останутся при своих долях` : ""}. Свою монополию бот отдаёт очень дорого.`),
       h("div", { class: "row offerbox" }, whole, h("span", { class: "muted" }, "млн ₽"),
         button("Предложить выкуп", () => send({ t: "bidCompany", cell: i, price: Number(whole.value) }), dis)),
-      h("h3", {}, "Купить акции у владельца"),
-      free ? h("div", { class: "muted tiny" }, `С каждой аренды и дохода здесь вы будете получать свою долю. Владелец может продать до ${free * 10}%.`)
-        : h("div", { class: "muted tiny" }, "Свободных акций у владельца нет. Ищите их на «Бирже»."),
-      free ? h("div", { class: "row offerbox" }, lots, h("span", { class: "muted" }, "по"), per, h("span", { class: "muted" }, "за 10%"),
-        button("Предложить", () => send({ t: "bidShares", cell: i, lots: Number((lots as HTMLSelectElement).value), price: Number(per.value) }), dis)) : "",
+      h("h3", {}, "Кто владеет акциями"),
+      this.shareholders(i, (x) => { this.dealSeller.set(i, x); this.showDeal(i, reply); }),
+      h("h3", {}, "Купить акции"),
+      seller !== undefined ? h("div", { class: "muted tiny" }, `С каждой аренды и дохода вы будете получать свою долю. Соберёте больше, чем у управляющего (${ownerLots(p) * 10}%), — управление перейдёт к вам. Бот продаёт свой контрольный пакет только с наценкой ×1,6.`)
+        : h("div", { class: "muted tiny" }, "Свободных акций ни у кого нет. Ищите их на «Бирже»."),
+      seller !== undefined ? h("div", { class: "row offerbox" }, h("span", { class: "muted" }, "у"), sellerSel, lots, h("span", { class: "muted" }, "по"), per, h("span", { class: "muted" }, "за 10%"),
+        button("Предложить", () => send({ t: "bidShares", cell: i, lots: Number((lots as HTMLSelectElement).value), price: Number(per.value), seller }), dis)) : "",
       myTurn ? "" : h("div", { class: "hint" }, "Предлагать сделки можно в свой ход — до броска или в конце хода."),
       s.cfg.realism === "off" ? "" : this.darkMethods(i, myTurn),
       h("div", { class: "muted tiny" }, `У вас ${fmt(pl.money)} млн ₽.`),
     );
     this.modal.dataset.view = "deal";
+  }
+
+  /** Выбранный в окне сделки продавец акций (по клетке). */
+  private dealSeller = new Map<number, number>();
+
+  /** Таблица акционеров: у кого сколько, кто управляет, что выставлено на биржу. */
+  private shareholders(i: number, onBuy?: (pid: number) => void): Node {
+    const s = this.s, p = s.props[i], me = this.meId;
+    if (p.owner === null) return h("div", { class: "muted tiny" }, "У компании нет владельца");
+    const rows = [p.owner, ...Object.keys(p.holders).map(Number)]
+      .map((x) => ({ x, lots: x === p.owner ? ownerLots(p) : p.holders[x] }))
+      .sort((a, b) => b.lots - a.lots);
+    return h("div", { class: "holders" }, ...rows.map(({ x, lots }) => {
+      const pl = s.players[x];
+      const listed = p.listings.filter((l) => l.seller === x).reduce((a, l) => a + l.lots, 0);
+      const role = x === p.owner ? (controlled(p) ? "управляет · контрольный пакет" : "управляет · без контроля") : "акционер";
+      const can = onBuy && x !== me && !pl.bankrupt && freeLots(s, x, i) > 0;
+      return h("div", { class: "holder" },
+        h("span", { class: "dot", style: `background:${pl.color}` }),
+        h("b", {}, x === me && pl.name !== "Вы" ? `${pl.name} (вы)` : pl.name),
+        h("span", { class: "pct" }, `${lots * 10}%`),
+        h("div", { class: "bar" }, h("div", { style: `width:${lots * 10}%;background:${pl.color}` })),
+        h("span", { class: "muted tiny" }, `${role}${listed ? ` · на бирже ${listed * 10}%` : ""}${pl.bot ? " · бот" : ""}`),
+        can ? button("Купить у него", () => onBuy!(x), "small ghost") : "");
+    }));
   }
 
   /** «Тёмные методы»: заказать рейдеров или проверку конкуренту. */
@@ -1450,7 +1487,7 @@ export class App {
         if (p.construction) rows.push(h("div", {}, `Стройка ур. ${p.construction.target}: ${Math.floor(p.construction.progress)}%`));
         if (p.branch === "special") rows.push(h("div", { class: "muted" }, BRANCH_EFFECTS[c.industry!]));
       }
-      if (p.owner !== null) rows.push(h("div", {}, `Аренда сейчас: ${fmt(rentFor(s, i))} млн ₽`));
+      if (p.owner !== null) rows.push(h("div", {}, `Аренда сейчас: ${fmt(rentFor(s, i))} млн ₽`), h("h3", {}, "Кто владеет акциями"), this.shareholders(i));
       if (p.owner !== null && p.owner !== this.meId) rows.push(h("div", { class: "row" }, button("🤝 Предложить сделку", () => this.showDeal(i), "primary")));
     } else {
       const d: Record<string, string> = {

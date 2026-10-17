@@ -292,3 +292,12 @@ button.tablebtn { background: #e8c15a; color: #222; border-color: #e8c15a; font-
 .badge-row span { font-size: 11px; padding: 1px 6px; border-radius: 8px; background: #eef2f5; color: #345; }
 .badge-row span.bad { background: #fde3e3; color: #a12; }
 button.danger { background: #b3261e; color: #fff; border-color: #b3261e; }
+.holders { display: grid; gap: 6px; margin: 4px 0 8px; }
+.holder { display: grid; grid-template-columns: 12px minmax(70px, auto) 44px 1fr auto; grid-template-areas: "dot name pct bar btn" ". note note note btn"; align-items: center; gap: 2px 8px; padding: 6px 8px; border: 1px solid #e6e1d6; border-radius: 10px; }
+.holder .dot { grid-area: dot; }
+.holder b { grid-area: name; }
+.holder .pct { grid-area: pct; font-weight: 800; text-align: right; }
+.holder .bar { grid-area: bar; height: 8px; background: #eee; border-radius: 4px; overflow: hidden; }
+.holder .bar > div { height: 100%; }
+.holder .tiny { grid-area: note; }
+.holder button { grid-area: btn; }
