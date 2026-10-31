@@ -3,7 +3,7 @@
 
 /** Номера рекламных блоков из кабинета Рекламной сети Яндекса. Пока — тестовые блоки Яндекса. */
 export const AD_UNITS = {
-  rewarded: "demo-rewarded-yandex",
+  rewarded: "R-M-20240214-1", // «Бонус 100» — реклама с вознаграждением
   interstitial: "demo-interstitial-yandex",
 };
 
