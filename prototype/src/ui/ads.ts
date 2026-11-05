@@ -1,14 +1,38 @@
 // Реклама Яндекса: за награду (по желанию игрока) и между партиями.
 // В Android — нативный модуль YandexAds; в браузере — заглушка, чтобы проверить сценарий.
 
-/** Номера рекламных блоков из кабинета Рекламной сети Яндекса. Пока — тестовые блоки Яндекса. */
-export const AD_UNITS = {
+/** Номера рекламных блоков из кабинета Рекламной сети Яндекса — запасные, если сайт недоступен. */
+export const AD_UNITS: { rewarded: string | null; interstitial: string | null } = {
   rewarded: "R-M-20240214-1", // «Бонус 100» — реклама с вознаграждением
-  interstitial: "demo-interstitial-yandex",
+  interstitial: null, // межстраничной пока нет — включится с сайта, без обновления игры
 };
 
+/** Номера блоков можно поменять на сайте, не выпуская новую версию игры. */
+const REMOTE_CONFIG = "https://pitbut.github.io/oligarh-ads.json";
+const CACHE_KEY = "oligarh-ads";
+const isUnit = (v: unknown): v is string | null => v === null || (typeof v === "string" && /^(R-M-\d+-\d+|demo-[a-z-]+)$/.test(v));
+
+async function loadUnits() {
+  try { // сначала то, что сохранили в прошлый раз
+    const c = JSON.parse(localStorage.getItem(CACHE_KEY) ?? "null") as Partial<typeof AD_UNITS> | null;
+    if (c && isUnit(c.rewarded) && isUnit(c.interstitial)) Object.assign(AD_UNITS, c);
+  } catch { /* нет кэша */ }
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 4000);
+    const r = await fetch(REMOTE_CONFIG, { cache: "no-store", signal: ctl.signal });
+    clearTimeout(t);
+    if (!r.ok) return;
+    const c = (await r.json()) as Partial<typeof AD_UNITS>;
+    if (isUnit(c.rewarded) && isUnit(c.interstitial)) {
+      AD_UNITS.rewarded = c.rewarded; AD_UNITS.interstitial = c.interstitial;
+      try { localStorage.setItem(CACHE_KEY, JSON.stringify(AD_UNITS)); } catch { /* приватный режим */ }
+    }
+  } catch { /* нет интернета — играем с тем, что есть */ }
+}
+
 interface NativeAds {
-  init(o: { rewardedId: string; interstitialId: string }): Promise<void>;
+  init(o: { rewardedId?: string; interstitialId?: string }): Promise<void>;
   isReady(): Promise<{ rewarded: boolean; interstitial: boolean }>;
   showRewarded(): Promise<{ rewarded: boolean }>;
   showInterstitial(): Promise<void>;
@@ -24,7 +48,9 @@ let started = false;
 export function initAds() {
   if (started) return;
   started = true;
-  void native()?.init({ rewardedId: AD_UNITS.rewarded, interstitialId: AD_UNITS.interstitial }).catch(() => {});
+  const n = native();
+  if (!n) return;
+  void loadUnits().then(() => n.init({ rewardedId: AD_UNITS.rewarded ?? undefined, interstitialId: AD_UNITS.interstitial ?? undefined })).catch(() => {});
 }
 
 /** Показать рекламу за награду. true — досмотрели до конца, награду можно выдать. */
@@ -40,6 +66,7 @@ let lastInterstitial = 0;
 /** Межстраничная реклама — не чаще раза в 3 минуты. */
 export async function showInterstitial(): Promise<void> {
   if (Date.now() - lastInterstitial < 180000) return;
+  if (native() && !AD_UNITS.interstitial) return; // блок не подключён
   lastInterstitial = Date.now();
   const n = native();
   if (n) { try { await n.showInterstitial(); } catch { /* не загрузилась — не страшно */ } return; }
