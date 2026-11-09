@@ -125,6 +125,7 @@ export function outerInfo(seg) {
       const ha = t === 'spur' ? 1 : 0.8;
       const da = d + 2 * m * (ha + x), df = d - 2 * m * (1.25 - x);
       o.r0 = o.r1 = da / 2; o.rb0 = o.rb1 = df / 2; o.pitch = d / 2; o.toothed = true;
+      if (beta > 0) o.helix = { beta: rad(beta), dir: seg.dir === 'левое' ? -1 : 1, rp: d / 2 };
       o.dia.push({ at: 0.5, v: da, fit: seg.fit || 'h11' });
       const title = t === 'spur' ? null : 'Зубчатый венец муфты';
       o.table = {
@@ -163,15 +164,46 @@ export function outerInfo(seg) {
     }
     case 'wormwheel': {
       const m = num(seg.m, 1), z = num(seg.z, 30), q = num(seg.q, 10), x = num(seg.x), z1 = num(seg.z1, 1);
-      const d = m * z, da = m * (z + 2 + 2 * x), daM = da + 6 * m / (z1 + 2), df = m * (z - 2.4 + 2 * x);
-      o.r0 = o.r1 = daM / 2; o.rb0 = o.rb1 = df / 2; o.pitch = d / 2; o.toothed = true; o.da = da;
-      o.dia.push({ at: 0.5, v: daM, fit: seg.fit || 'h11' });
+      const d = m * z, d1 = q * m, aw = 0.5 * m * (q + z + 2 * x);
+      const da = m * (z + 2 + 2 * x), daM = da + 6 * m / (z1 + 2), df = m * (z - 2.4 + 2 * x);
+      // ГОСТ 2.406: венец с выемкой под червяк — дуги с центром на оси червяка (на расстоянии aw от оси колеса)
+      const Rt = aw - da / 2;            // радиус выемки по вершинам (= d1/2 - m(1-x))
+      const Rp = aw - d / 2;             // радиус делительной дуги
+      const Rf = aw - df / 2;            // радиус дуги впадин
+      const xm = L / 2, c = Math.min(0.5 * m, L / 6);
+      const tip = xx => {
+        const dx = xx - xm;
+        return dx * dx < Rt * Rt ? Math.min(daM / 2, aw - Math.sqrt(Rt * Rt - dx * dx)) : daM / 2;
+      };
+      const root = xx => { const dx = xx - xm; return dx * dx < Rf * Rf ? aw - Math.sqrt(Rf * Rf - dx * dx) : df / 2; };
+      // точки перехода выемки в цилиндр daM (там видимые рёбра)
+      const hy = aw - daM / 2;
+      const hw = Rt > hy ? Math.min(Math.sqrt(Rt * Rt - hy * hy), xm - c) : 0;
+      const xa = xm - hw, xb = xm + hw;
+      const pts = [{ x: 0, r: daM / 2 - c, s: false }, { x: c, r: daM / 2, s: false }];
+      if (hw > 0) {
+        if (xa > c + 1e-6) pts.push({ x: xa, r: tip(xa), s: false });
+        const N = 24;
+        for (let i = 1; i < N; i++) { const xx = xa + (xb - xa) * i / N; pts.push({ x: xx, r: tip(xx), s: true }); }
+        if (xb < L - c - 1e-6) pts.push({ x: xb, r: tip(xb), s: false });
+      }
+      pts.push({ x: L - c, r: daM / 2, s: false }, { x: L, r: daM / 2 - c, s: false });
+      const bpts = [];
+      for (let i = 0, N = 24; i <= N; i++) { const xx = L * i / N; bpts.push({ x: xx, r: root(xx), s: i > 0 && i < N }); }
+      o.custom = pts; o.customBody = bpts;
+      o.r0 = o.r1 = daM / 2 - c; o.rb0 = o.rb1 = root(0); o.pitch = d / 2; o.toothed = true; o.da = da;
+      const gamma = Math.atan(z1 / q);
+      o.ww = { aw, Rt, Rp, Rf, xm, daM, da, df, d, d1, gamma, dir: seg.dir === 'левое' ? -1 : 1 };
+      o.helix = { beta: gamma, dir: seg.dir === 'левое' ? -1 : 1, rp: d / 2 };
+      o.dia.push({ at: Math.min(0.12, c / L + 0.04), v: daM, fit: seg.fit || 'h11' }, { at: 0.5, v: da, fit: '', r: da / 2 });
+      o.throatR = { x: xm, r: Rt };
       o.table = {
         rows: [
-          ['Модуль', 'm', fmt(m)], ['Число зубьев', 'z₂', String(z)], ['Направление линии зуба', '—', 'Правое'],
+          ['Модуль', 'm', fmt(m)], ['Число зубьев', 'z₂', String(z)], ['Направление линии зуба', '—', seg.dir === 'левое' ? 'Левое' : 'Правое'],
           ['Коэффициент смещения червяка', 'x', fmt(x)], ['Исходный производящий червяк', '—', 'ГОСТ 19036-94'],
           ['Степень точности', '—', (seg.prec || '8-B') + ' ГОСТ 3675-81'],
-          ['Межосевое расстояние', 'aw', fmt(0.5 * m * (q + z + 2 * x))], ['Делительный диаметр', 'd₂', fmt(d)],
+          ['Межосевое расстояние', 'aw', fmt(Math.round(aw * 1000) / 1000)], ['Делительный диаметр', 'd₂', fmt(d)],
+          ['Вид сопряжённого червяка', '—', seg.wtype || 'ZA'],
           ['Число витков сопряж. червяка', 'z₁', String(z1)],
         ],
       };
@@ -307,14 +339,17 @@ export function innerInfo(seg) {
       break;
     }
     case 'igear': {
-      const m = num(seg.m, 1), z = num(seg.z, 40), x = num(seg.x);
-      const d = m * z, da = d - 2 * m * (1 - x), df = d + 2 * m * (1.25 + x);
-      o.r0 = o.r1 = df / 2; o.tipR = da / 2; o.pitch = d / 2; o.toothed = true;
+      const m = num(seg.m, 1), z = num(seg.z, 40), x = num(seg.x), beta = num(seg.beta);
+      const d = m * z / Math.cos(rad(beta)), da = d - 2 * m * (1 - x), df = d + 2 * m * (1.25 + x);
+      o.r0 = o.r1 = df / 2; o.tipR = da / 2; o.pitch = d / 2; o.toothed = true; o.z = z;
+      if (beta > 0) o.helix = { beta: rad(beta), dir: seg.dir === 'левое' ? -1 : 1, rp: d / 2 };
       o.dia.push({ v: da, fit: seg.fit || 'H11', r: da / 2 });
       o.table = {
         title: 'Внутренний венец', rows: [
-          ['Модуль', 'm', fmt(m)], ['Число зубьев', 'z', String(z)], ['Нормальный исходный контур', '—', 'ГОСТ 13755-2015'],
-          ['Коэффициент смещения', 'x', fmt(x)], ['Степень точности', '—', (seg.prec || '8-B') + ' ГОСТ 1643-81'], ['Делительный диаметр', 'd', fmt(d)],
+          ['Модуль', 'm', fmt(m)], ['Число зубьев', 'z', String(z)],
+          ...(beta > 0 ? [['Угол наклона зуба', 'β', fmt(beta) + '°'], ['Направление линии зуба', '—', seg.dir === 'левое' ? 'Левое' : 'Правое']] : []),
+          ['Нормальный исходный контур', '—', 'ГОСТ 13755-2015'],
+          ['Коэффициент смещения', 'x', fmt(x)], ['Степень точности', '—', (seg.prec || '8-B') + ' ГОСТ 1643-81'], ['Делительный диаметр', 'd', fmt(Math.round(d * 1000) / 1000)],
         ],
       };
       break;
@@ -323,7 +358,7 @@ export function innerInfo(seg) {
       const D = num(seg.D), z = num(seg.z, 6);
       let d = num(seg.d); let m = 0;
       if (seg.kind === 'эвольвентные') { m = num(seg.m, 1); d = D - 2 * 1.1 * m; }
-      o.r0 = o.r1 = D / 2; o.tipR = d / 2; o.toothed = true;
+      o.r0 = o.r1 = D / 2; o.tipR = d / 2; o.toothed = true; o.z = z;
       const des = seg.des || (seg.kind === 'эвольвентные' ? `${fmt(D)}×${fmt(m)} ГОСТ 6033-80` : `d-${z}×${fmt(d)}×${fmt(D)}×${fmt(num(seg.b))} ГОСТ 1139-80`);
       o.dia.push({ label: des, leader: true });
       o.spline = { z, d, D, b: num(seg.b), kind: seg.kind, m };
@@ -356,7 +391,7 @@ export function computeModel(project) {
     const rPrev = prev ? prev.info.r1 : 0, rNext = next ? next.info.r0 : 0;
     let pts = info.custom ? info.custom.map(p => ({ x: x0 + p.x, r: p.r, s: p.s })) :
       [{ x: x0, r: info.r0, s: false }, { x: x1, r: info.r1, s: false }];
-    let bpts = info.toothed ? [{ x: x0, r: info.rb0, s: false }, { x: x1, r: info.rb1, s: false }] : null;
+    let bpts = info.customBody ? info.customBody.map(p => ({ x: x0 + p.x, r: p.r, s: p.s })) : info.toothed ? [{ x: x0, r: info.rb0, s: false }, { x: x1, r: info.rb1, s: false }] : null;
     const chA = num(seg.chA, 45);
     const chL = num(seg.chL), chR = num(seg.chR);
     const fL = num(seg.fL), fR = num(seg.fR);

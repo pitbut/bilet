@@ -588,7 +588,7 @@ function fileTab() {
         it.id !== st.id ? h('button', { class: 'mini del', onclick: async () => { if (confirm('Удалить проект?')) { await P.deleteProject(it.id); renderPanel(); } } }, '🗑') : null));
     }
   });
-  wrap.append(h('div', { class: 'hint', style: 'margin-top:18px' }, 'ВалCAD 1.0 · чертежи валов по ЕСКД'));
+  wrap.append(h('div', { class: 'hint', style: 'margin-top:18px' }, 'ВалCAD 1.1 · чертежи валов по ЕСКД'));
   return wrap;
 }
 

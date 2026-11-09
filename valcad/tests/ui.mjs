@@ -1,7 +1,7 @@
 import { chromium } from 'playwright-core';
 const out = '/tmp/claude-0/-home-user-bilet/fb10bfc9-3e36-50ba-984c-77569bbcd2d1/scratchpad/ui';
 import { mkdirSync } from 'fs'; mkdirSync(out, { recursive: true });
-const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', args: ['--use-gl=swiftshader', '--enable-webgl', '--ignore-gpu-blocklist'] });
+const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--use-gl=swiftshader', '--enable-webgl', '--ignore-gpu-blocklist'] });
 const pg = await b.newPage({ viewport: { width: 412, height: 870 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true });
 const errs = [];
 pg.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') errs.push(m.type() + ': ' + m.text()); });

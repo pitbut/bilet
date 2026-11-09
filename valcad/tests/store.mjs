@@ -4,7 +4,7 @@ const out = '/home/user/bilet/valcad/store';
 const S = samples();
 const demo = S.a; demo.meta.name = 'Вал-шестерня'; demo.meta.view = 'полуразрез'; demo.meta.sheetMode = 'деталь';
 demo.meta.developer = 'Иванов'; demo.meta.checker = 'Петров';
-const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', args: ['--use-gl=swiftshader', '--enable-webgl', '--ignore-gpu-blocklist'] });
+const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--use-gl=swiftshader', '--enable-webgl', '--ignore-gpu-blocklist'] });
 const pg = await b.newPage({ viewport: { width: 360, height: 640 }, deviceScaleFactor: 3, hasTouch: true, isMobile: true });
 await pg.addInitScript(p => { if (!localStorage.getItem('valcad.last')) { localStorage.setItem('valcad.projects.v1', JSON.stringify({ demo: p })); localStorage.setItem('valcad.last', 'demo'); } }, demo);
 await pg.goto('http://localhost:4173/');

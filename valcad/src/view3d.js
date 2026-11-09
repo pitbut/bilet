@@ -8,8 +8,7 @@ import { outerPolygon, innerPolygon, rAt } from './geom.js';
 
 const TEETH = new Set(['spur', 'coupling', 'couplingBlind', 'wormwheel', 'sprocket', 'tpulley', 'spline', 'bevel']);
 
-function gearShape(z, ra, rf, kind, holeR, sp) {
-  const shape = new THREE.Shape();
+function gearPts(z, ra, rf, kind, sp) {
   const pts = [];
   if (kind === 'spline' && sp && sp.kind !== 'эвольвентные') {
     const half = sp.b / 2;
@@ -28,10 +27,37 @@ function gearShape(z, ra, rf, kind, holeR, sp) {
       pts.push([rf, a + step * 0.9]);
     }
   }
-  pts.forEach(([r, a], i) => (i ? shape.lineTo(r * Math.cos(a), r * Math.sin(a)) : shape.moveTo(r * Math.cos(a), r * Math.sin(a))));
+  return pts.map(([r, a]) => [r * Math.cos(a), r * Math.sin(a)]);
+}
+function gearShape(z, ra, rf, kind, holeR, sp) {
+  const shape = new THREE.Shape();
+  gearPts(z, ra, rf, kind, sp).forEach(([x, y], i) => (i ? shape.lineTo(x, y) : shape.moveTo(x, y)));
   shape.closePath();
   if (holeR > 0.1) { const h = new THREE.Path(); h.absarc(0, 0, holeR, 0, Math.PI * 2, true); shape.holes.push(h); }
   return shape;
+}
+// Кольцо с внутренними зубьями: снаружи окружность rOut, внутри — профиль впадин/зубьев
+function innerToothShape(rOut, holePts) {
+  const shape = new THREE.Shape();
+  shape.absarc(0, 0, rOut, 0, Math.PI * 2, false);
+  const h = new THREE.Path();
+  holePts.slice().reverse().forEach(([x, y], i) => (i ? h.lineTo(x, y) : h.moveTo(x, y)));
+  h.closePath();
+  shape.holes.push(h);
+  return shape;
+}
+// Закрутка вокруг оси X (косые зубья): угол растёт вдоль оси на tgβ/rp
+function twist(g, xm, helix) {
+  if (!helix || !(helix.beta > 0)) return g;
+  const k = helix.dir * Math.tan(helix.beta) / helix.rp;
+  const P = g.attributes.position;
+  for (let i = 0; i < P.count; i++) {
+    const f = (P.getX(i) - xm) * k, c = Math.cos(f), sn = Math.sin(f);
+    const y = P.getY(i), z = P.getZ(i);
+    P.setY(i, y * c - z * sn); P.setZ(i, y * sn + z * c);
+  }
+  g.computeVertexNormals();
+  return g;
 }
 function polyShape(n, R, a0, holeR) {
   const shape = new THREE.Shape();
@@ -44,8 +70,11 @@ function polyShape(n, R, a0, holeR) {
   return shape;
 }
 // Экструзия формы (в плоскости YZ) вдоль X от x0 до x1
-function extrudeX(shape, x0, x1) {
-  const g = new THREE.ExtrudeGeometry(shape, { depth: x1 - x0, bevelEnabled: false, curveSegments: 24 });
+function extrudeX(shape, x0, x1, steps = 1) {
+  // чуть внутрь, чтобы торцы не совпадали с торцами тела вращения (иначе мерцание)
+  const e = Math.min(0.05, (x1 - x0) / 20);
+  x0 += e; x1 -= e;
+  const g = new THREE.ExtrudeGeometry(shape, { depth: x1 - x0, bevelEnabled: false, curveSegments: 24, steps });
   // форма в (u,v) -> (z = -u?, y = v); экструзия по z -> x
   g.rotateY(Math.PI / 2);
   g.translate(x0, 0, 0);
@@ -85,6 +114,7 @@ export function buildMeshes(geo, opts = {}) {
     let rIn;
     if (o.seg.type === 'hex') rIn = o.info.S / 2 * 0.995;
     else if (o.seg.type === 'square') rIn = o.info.S / 2 * 0.995;
+    else if (o.info.ww) rIn = o.info.ww.df / 2 * 0.995;
     else rIn = Math.min(o.info.rb0, o.info.rb1) * 0.995;
     for (const p of rev) if (p.x > o.x0 - 1e-6 && p.x < o.x1 + 1e-6) p.r = Math.min(p.r, rIn);
   }
@@ -153,11 +183,50 @@ export function buildMeshes(geo, opts = {}) {
       g.computeVertexNormals();
       parts.push({ geom: g, mat: toothMat });
       continue;
+    } else if (info.ww) {
+      // червячное колесо: зубья по выемке (дуги вокруг оси червяка) и с наклоном на угол подъёма γ
+      const w = info.ww, z = Math.max(6, Math.round(+seg.z || 30));
+      const shp = gearShape(z, w.daM / 2, w.df / 2, 'gear', hr);
+      const g = extrudeX(shp, x0, x1, 24);
+      const P = g.attributes.position;
+      const ra0 = w.daM / 2, rf0 = w.df / 2;
+      const tip = xx => { const dx = xx - w.xm; return dx * dx < w.Rt * w.Rt ? Math.min(ra0, w.aw - Math.sqrt(w.Rt * w.Rt - dx * dx)) : ra0; };
+      const root = xx => { const dx = xx - w.xm; return dx * dx < w.Rf * w.Rf ? Math.max(rf0, w.aw - Math.sqrt(w.Rf * w.Rf - dx * dx)) : rf0; };
+      for (let i = 0; i < P.count; i++) {
+        const y = P.getY(i), zz = P.getZ(i), r = Math.hypot(y, zz);
+        if (r < rf0 - 1e-4) continue;
+        const xl = P.getX(i) - x0, t = (r - rf0) / (ra0 - rf0);
+        const rn = root(xl) + t * (tip(xl) - root(xl));
+        P.setY(i, y / r * rn); P.setZ(i, zz / r * rn);
+      }
+      twist(g, (x0 + x1) / 2, info.helix);
+      parts.push({ geom: g, mat: toothMat, seg });
+      continue;
     } else {
       const z = seg.type === 'sprocket' || seg.type === 'spline' ? Math.round(+seg.z || 10) : Math.round(+seg.z || 20);
       shape = gearShape(Math.max(4, z), info.r0, info.rb0, seg.type === 'spline' ? 'spline' : 'gear', hr, info.spline);
     }
-    parts.push({ geom: extrudeX(shape, x0, x1), mat: seg.type === 'hex' || seg.type === 'square' ? mat : toothMat, seg });
+    const steps = info.helix ? Math.min(40, Math.max(8, Math.ceil((x1 - x0) / 1.5))) : 1;
+    const gg = extrudeX(shape, x0, x1, steps);
+    twist(gg, (x0 + x1) / 2, info.helix);
+    parts.push({ geom: gg, mat: seg.type === 'hex' || seg.type === 'square' ? mat : toothMat, seg });
+  }
+  // Внутренние зубья: шлицевые отверстия и колёса с внутренним зацеплением
+  for (const inn of [geo.inner.L, geo.inner.R]) {
+    for (const q of inn.segs) {
+      if (q.seg.type !== 'igear' && q.seg.type !== 'ispline') continue;
+      const info = q.info;
+      const a = inn.map(q.u0), b = inn.map(q.u1);
+      const x0 = Math.min(a, b), x1 = Math.max(a, b);
+      const holePts = q.seg.type === 'ispline'
+        ? gearPts(Math.max(3, info.z || 6), info.r0, info.tipR, 'spline', info.spline)
+        : gearPts(Math.max(6, info.z || 30), info.r0, info.tipR, 'gear');
+      const shape = innerToothShape(info.r0 + 0.3, holePts);
+      const steps = info.helix ? Math.min(40, Math.max(8, Math.ceil((x1 - x0) / 1.5))) : 1;
+      const g = extrudeX(shape, x0, x1, steps);
+      twist(g, (x0 + x1) / 2, info.helix);
+      parts.push({ geom: g, mat: toothMat });
+    }
   }
   // Червяк — витки как кольца по винтовой
   for (const o of geo.outer.filter(q => q.seg.type === 'worm')) {

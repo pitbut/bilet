@@ -6,9 +6,9 @@ import { chromium } from 'playwright-core';
 const out = process.argv[2] || '/tmp/claude-0/-home-user-bilet/fb10bfc9-3e36-50ba-984c-77569bbcd2d1/scratchpad/render';
 mkdirSync(out, { recursive: true });
 const S = samples();
-const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
+const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
 const page = await browser.newPage({ deviceScaleFactor: 1 });
-for (const [k, p] of Object.entries(S)) {
+for (const [k, p] of Object.entries(S).filter(([k]) => !process.argv[3] || process.argv[3].includes(k))) {
   const t = Date.now();
   const sh = buildSheet(p);
   const svg = toSVG(sh, { fontUrl: 'file:///home/user/bilet/valcad/public/fonts/gost.ttf' });

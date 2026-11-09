@@ -25,7 +25,7 @@ svg text{font-family:G}
 <img class="d3" src="data:image/png;base64,${d3}">
 </body></html>`;
 writeFileSync('/tmp/claude-0/feature.html', html);
-const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
+const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
 const pg = await b.newPage({ viewport: { width: 1024, height: 500 } });
 await pg.goto('file:///tmp/claude-0/feature.html'); await pg.waitForTimeout(600);
 await pg.screenshot({ path: '/home/user/bilet/valcad/store/feature_1024x500.png' });

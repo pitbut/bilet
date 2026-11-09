@@ -39,5 +39,17 @@ export function samples() {
     S('outer', 'cyl', { D: 30, L: 40, fit: 'k6', chR: 1, features: [F('keyway', { angle: 'сверху', pos: 6, len: 25 }), F('ringhole', { n: 4, d: 5, pos: 34 })] }),
   ];
   e.innerR = [S('inner', 'igear', { m: 1, z: 20, L: 14 })];
-  return { a, b, c, d, e };
+  const f = newProject();
+  f.meta.view = 'полуразрез'; f.meta.name = 'Вал червячного колеса';
+  f.outer = [
+    S('outer', 'cyl', { D: 40, L: 35, chL: 1, fit: 'k6' }),
+    S('outer', 'cyl', { D: 50, L: 15 }),
+    S('outer', 'wormwheel', { m: 4, z: 40, z1: 2, q: 10, L: 40, dir: 'правое' }),
+    S('outer', 'cyl', { D: 50, L: 15 }),
+    S('outer', 'spur', { m: 3, z: 24, beta: 15, dir: 'левое', L: 36, chL: 1, chR: 1 }),
+    S('outer', 'cyl', { D: 45, L: 40, chR: 1.5, fit: 'k6' }),
+  ];
+  f.innerL = [S('inner', 'ispline', { z: 6, d: 23, D: 26, b: 6, L: 30 })];
+  f.innerR = [S('inner', 'igear', { m: 1.5, z: 20, beta: 20, L: 25 })];
+  return { a, b, c, d, e, f };
 }

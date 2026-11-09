@@ -347,7 +347,15 @@ function special(d, geo, s, mode) {
       }
       case 'spline': if (mode === 'view') pl(info.root, 'solid', 'thin', 0); break;
       case 'worm': pl(info.pitch); if (mode === 'view') pl(info.root, 'solid', 'thin', 0); break;
-      case 'spur': case 'coupling': case 'couplingBlind': case 'wormwheel': case 'sprocket': case 'tpulley': pl(info.pitch); break;
+      case 'spur': case 'coupling': case 'couplingBlind': case 'sprocket': case 'tpulley': pl(info.pitch); break;
+      case 'wormwheel': {
+        // делительная дуга с центром на оси червяка (ГОСТ 2.406)
+        const w = info.ww, xc = X(x0 + w.xm), half = Math.min(info.L / 2 + 2 / s, w.Rp * 0.95);
+        const da = Math.asin(half / w.Rp) * 180 / Math.PI;
+        d.arc(xc, Y(w.aw), Y(w.Rp), 270 - da, 270 + da, 'thin', 'dashdot');
+        d.arc(xc, -Y(w.aw), Y(w.Rp), 90 - da, 90 + da, 'thin', 'dashdot');
+        break;
+      }
       case 'bevel': {
         const { big, de, k } = info.bevel;
         const xb = big ? x0 : x1, xs = big ? x1 : x0;
@@ -371,6 +379,18 @@ function special(d, geo, s, mode) {
         }
         break;
       default: break;
+    }
+    // направление зубьев косозубого колеса: три тонкие линии на виде (ГОСТ 2.402)
+    if (mode === 'view' && info.helix) {
+      const h = info.helix, b = x1 - x0, rr = Math.min(info.r0, info.r1);
+      const ux = Math.cos(h.beta), uy = -h.dir * Math.sin(h.beta);
+      const len = b * 0.7 / Math.max(ux, 0.3);
+      const xc = (x0 + x1) / 2, yc = rr * 0.55;
+      const gap = Math.max(rr * 0.12, 1.5 / s);
+      for (const k of [-1, 0, 1]) {
+        const cx = xc, cy = yc + k * gap;
+        d.line(X(cx - ux * len / 2), Y(cy - uy * len / 2), X(cx + ux * len / 2), Y(cy + uy * len / 2), 'thin');
+      }
     }
   }
   for (const inn of [geo.inner.L, geo.inner.R]) {
@@ -439,12 +459,18 @@ function mainDims(d, project, geo, s, mode) {
       if (n > 1 && meta.closing === 'последняя') skip = n - 1;
       if (n > 1 && meta.closing === 'первая') skip = 0;
       const rowY = -Rp - 10;
+      // короткие размеры, чей текст не помещается, уводим во второй ряд, чтобы надписи не слипались
+      let lastEnd = -1e9, stagger = false;
       segs.forEach((o, i) => {
         if (i === skip || o.seg.noLen || n === 1) return;
         const lab = lenLabel(o.info.L);
-        dimAligned(d, [X(o.x0), -Y(rEdge(o.x0))], [X(o.x1), -Y(rEdge(o.x1))], rowY, lab, { textSide: i === n - 1 ? 1 : (i === 0 ? -1 : 1) });
+        const [ea, eb] = dimExtent(X(o.x0), X(o.x1), lab);
+        const lev = ea < lastEnd + 1 ? rowY - 7 : rowY;
+        if (lev !== rowY) stagger = true; else lastEnd = eb;
+        dimAligned(d, [X(o.x0), -Y(rEdge(o.x0))], [X(o.x1), -Y(rEdge(o.x1))], lev, lab, { textSide: 1 });
       });
       bottom.rows[0] = [[-1e9, 1e9]];
+      if (stagger) bottom.base -= 7;
       void bounds;
       const lab = lenLabel(geo.Lt);
       const lev = bottom.place(0, X(geo.Lt));
@@ -490,6 +516,10 @@ function mainDims(d, project, geo, s, mode) {
         const xm = (x0 + x1) / 2, ym = rAt(o.pts, xm);
         lead(X(xm), Y(ym), (num(seg.D) > num(seg.D2) ? '▷' : '◁') + '1:' + fmt(Math.round(K * 100) / 100), 1);
       }
+    }
+    if (info.throatR) {
+      const w = info.ww, xx = x0 + w.xm, yy = w.aw - w.Rt;
+      lead(X(xx), Y(yy), 'R' + fmt(Math.round(w.Rt * 100) / 100), 1);
     }
     if (info.note) {
       const yy = Y(info.r0);
