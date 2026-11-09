@@ -51,5 +51,7 @@ export function samples() {
   ];
   f.innerL = [S('inner', 'ispline', { z: 6, d: 23, D: 26, b: 6, L: 30 })];
   f.innerR = [S('inner', 'igear', { m: 1.5, z: 20, beta: 20, L: 25 })];
-  return { a, b, c, d, e, f };
+  const g = JSON.parse(JSON.stringify(a)); g.meta.endViews = 'слева и справа'; g.meta.view = 'вид';
+  const h2 = JSON.parse(JSON.stringify(d)); h2.meta.endViews = 'слева';
+  return { a, b, c, d, e, f, g, h: h2 };
 }

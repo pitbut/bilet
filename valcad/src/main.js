@@ -495,6 +495,9 @@ function sectionsTab() {
   const p = st.project;
   const wrap = h('div');
   wrap.append(form([{ k: 'autoSections', label: 'Сечения по пазам, шлицам, граням и отверстиям — автоматически', type: 'bool' }], p.meta, () => changed({ panel: true })));
+  wrap.append(h('h3', {}, 'Дополнительные виды'));
+  wrap.append(form([{ k: 'endViews', label: 'Вид с торца', type: 'sel', opts: ['нет', 'слева', 'справа', 'слева и справа'] }], p.meta, () => changed()));
+  wrap.append(h('div', { class: 'hint' }, 'Вид слева ставится справа от главного вида, вид справа — слева (в проекционной связи, ГОСТ 2.305).'));
   if (p.meta.autoSections === undefined) p.meta.autoSections = true;
   const geo = computeModel(p);
   const secs = sectionList(p, geo);
@@ -524,6 +527,7 @@ const META_FIELDS = [
   { k: 'name', label: 'Наименование', type: 'text', wide: true },
   { k: 'material', label: 'Материал', type: 'material' },
   { k: 'view', label: 'Изображение', type: 'sel', opts: ['вид', 'полуразрез', 'разрез'] },
+  { k: 'endViews', label: 'Вид слева / справа', type: 'sel', opts: ['нет', 'слева', 'справа', 'слева и справа'] },
   { k: 'sheetMode', label: 'Показывать', type: 'sel', opts: ['лист', 'деталь'] },
   { k: 'format', label: 'Формат', type: 'sel', opts: ['авто', 'A4', 'A3', 'A2', 'A1'] },
   { k: 'scale', label: 'Масштаб', type: 'sel', opts: ['авто', '5:1', '4:1', '2,5:1', '2:1', '1:1', '1:2', '1:2,5', '1:4', '1:5', '1:10', '1:20'] },

@@ -815,35 +815,73 @@ function sectionBlock(geo, x, label, s) {
   return d;
 }
 
-// Вид с торца (для отверстий по окружности)
-function endViewBlock(geo, side, s, letter) {
+// Вид с торца. full=true — полный вид слева/справа (в проекционной связи), иначе местный вид по стрелке.
+// Вид слева: наблюдатель слева смотрит вдоль +X, вправо на листе — +Z; вид справа — наоборот.
+function endViewBlock(geo, side, s, letter, full = false) {
   const d = new Drawing();
+  const sx = side === 'L' ? 1 : -1;
+  const P = (z, y) => [z * sx * s, y * s];
   const list = side === 'L' ? geo.outer : geo.outer.slice().reverse();
-  let mx = 0;
-  const circles = [];
   const fh0 = geo.faceholes.concat(geo.facegrooves).filter(h => (side === 'L' ? h.dir > 0 : h.dir < 0));
-  const lim = Math.max(...fh0.map(h => (h.pcd ? h.pcd / 2 + h.d : h.rOut + 2)), 0);
+  const lim = full ? Infinity : Math.max(...fh0.map(h => (h.pcd ? h.pcd / 2 + h.d : h.rOut + 2)), 0);
+  const polyN = (n, R, a0) => { const pts = []; for (let i = 0; i < n; i++) { const a = (a0 + i * 360 / n) * Math.PI / 180; pts.push(P(R * Math.cos(a), R * Math.sin(a))); } return pts; };
+  let mx = 0, first = true;
   for (const o of list) {
-    const r = Math.max(o.info.r0, o.info.r1);
-    if (r > mx + 1e-6) { circles.push(r); mx = r; }
+    const { seg, info } = o;
+    const rNear = side === 'L' ? info.r0 : info.r1, rFar = side === 'L' ? info.r1 : info.r0;
+    const rMax = Math.max(rNear, rFar);
+    if (rMax <= mx + 1e-6 && !first) continue;
+    if (seg.type === 'hex') d.poly(polyN(6, info.Rc, seg.orient === 'ребро' ? 0 : 90), true, 'main');
+    else if (seg.type === 'square') d.poly(polyN(4, info.S / Math.SQRT2, 45), true, 'main');
+    else {
+      if (rNear > mx + 1e-6 || first) d.circle(0, 0, rNear * s, 'main');
+      if (rFar > Math.max(mx, rNear) + 1e-6) d.circle(0, 0, rFar * s, 'main');
+      if (info.pitch && info.toothed && seg.type !== 'spline') d.circle(0, 0, info.pitch * s, 'thin', 'dashdot');
+      if (seg.type === 'spline' && info.root) d.circle(0, 0, info.root * s, 'thin');
+      if (seg.type === 'thread' && info.minor) {
+        const fromNear = (seg.from === 'справа') === (side === 'R');
+        if (first && fromNear) d.arc(0, 0, info.minor * s, 0, 270, 'thin');
+      }
+    }
+    // фаска на ближнем торце видна как окружность
+    if (first) {
+      const xf = side === 'L' ? o.x0 : o.x1;
+      const ch = geo.chamfers.find(c => Math.abs(c.x - xf) < 1e-6);
+      if (ch && seg.type !== 'hex' && seg.type !== 'square') d.circle(0, 0, (ch.r - ch.cr) * s, 'main');
+    }
+    mx = Math.max(mx, rMax);
+    first = false;
     if (mx >= lim) break;
   }
-  for (const r of circles) d.circle(0, 0, r * s, 'main');
+  // отверстие с этого торца
   const inn = side === 'L' ? geo.inner.L : geo.inner.R;
-  if (inn.pts.length) d.circle(0, 0, inn.pts[0].r * s, 'main');
+  const q0 = inn.segs[0];
+  if (q0) {
+    const t = q0.seg.type, i0 = q0.info;
+    if (t === 'hex') d.poly(polyN(6, i0.S / Math.sqrt(3), 90), true, 'main');
+    else if (t === 'square') d.poly(polyN(4, i0.r0 * Math.SQRT2, 45), true, 'main');
+    else if (t === 'center') { d.circle(0, 0, i0.center.D / 2 * s, 'main'); d.circle(0, 0, i0.center.d / 2 * s, 'main'); if (q0.seg.form === 'B' || q0.seg.form === 'F') d.circle(0, 0, i0.center.D2 / 2 * s, 'main'); }
+    else if (t === 'ithread') { d.circle(0, 0, i0.r0 * s, 'main'); d.arc(0, 0, i0.major * s, 0, 270, 'thin'); }
+    else if (t === 'igear') { d.circle(0, 0, i0.tipR * s, 'main'); d.circle(0, 0, i0.pitch * s, 'thin', 'dashdot'); }
+    else if (t === 'ispline') { d.circle(0, 0, i0.tipR * s, 'main'); d.circle(0, 0, i0.r0 * s, 'thin'); }
+    else {
+      d.circle(0, 0, inn.pts[0].r * s, 'main');
+      if (inn.pts.length > 1 && Math.abs(inn.pts[1].r - inn.pts[0].r) > 1e-6 && Math.abs(inn.pts[1].x) < q0.info.L) d.circle(0, 0, inn.pts[1].r * s, 'main');
+    }
+  }
   const fh = geo.faceholes.filter(h => (side === 'L' ? h.dir > 0 : h.dir < 0));
   for (const h of fh) {
     d.circle(0, 0, h.pcd / 2 * s, 'thin', 'dashdot');
     for (let i = 0; i < h.n; i++) {
       const an = (h.a0 + i * 360 / h.n) * Math.PI / 180;
-      const cx = h.pcd / 2 * Math.cos(an) * s * (side === 'L' ? -1 : 1), cy = h.pcd / 2 * Math.sin(an) * s;
+      const [cx, cy] = P(h.pcd / 2 * Math.cos(an), h.pcd / 2 * Math.sin(an));
       d.circle(cx, cy, h.d / 2 * s, 'main');
       if (h.th) d.arc(cx, cy, h.th.d / 2 * s, 0, 270, 'thin');
       const e = h.d / 2 * s + 2;
       d.line(cx - e, cy, cx + e, cy, 'thin', 'dashdot'); d.line(cx, cy - e, cx, cy + e, 'thin', 'dashdot');
     }
     const an = h.a0 * Math.PI / 180;
-    const cx = h.pcd / 2 * Math.cos(an) * s * (side === 'L' ? -1 : 1), cy = h.pcd / 2 * Math.sin(an) * s;
+    const [cx, cy] = P(h.pcd / 2 * Math.cos(an), h.pcd / 2 * Math.sin(an));
     const txt = `${h.n} отв. ` + (h.th ? h.f.thr + '-7H' : '⌀' + fmt(h.d));
     leader(d, cx + h.d / 2 * s * 0.7, cy + h.d / 2 * s * 0.7, txt, { dx: 6, dy: mx * s - cy + 6 });
     dimAligned(d, [-h.pcd / 2 * s, 0], [h.pcd / 2 * s, 0], -(mx * s + 8), { main: '⌀' + fmt(h.pcd) });
@@ -853,8 +891,10 @@ function endViewBlock(geo, side, s, letter) {
   }
   const R = mx * s + 3;
   d.line(-R, 0, R, 0, 'thin', 'dashdot'); d.line(0, -R, 0, R, 'thin', 'dashdot');
-  const bb = d.bbox();
-  d.text(0, bb.y1 + 3, 5, letter, { anchor: 'c' });
+  if (letter) {
+    const bb = d.bbox();
+    d.text(0, bb.y1 + 3, 5, letter, { anchor: 'c' });
+  }
   return d;
 }
 
@@ -907,8 +947,17 @@ export function buildSheet(project, opts = {}) {
       const b = sectionBlock(geo, sc.x, L, s);
       if (b) blocks.push(b);
     }
+    // виды слева/справа по выбору пользователя — в проекционной связи с главным видом
+    const ev = meta.endViews || 'нет';
+    const wantL = ev === 'слева' || ev === 'слева и справа', wantR = ev === 'справа' || ev === 'слева и справа';
+    const mb0 = mv.bbox();
+    // отступ от торца вала: место под размеры диаметров у торцов, но не по габаритам выносок
+    void mb0;
+    const gapV = 22;
+    if (wantL) { const b = endViewBlock(geo, 'L', s, '', true); const bb = b.bbox(); mv.add(b, geo.Lt * s + gapV - bb.x0, 0); }
+    if (wantR) { const b = endViewBlock(geo, 'R', s, '', true); const bb = b.bbox(); mv.add(b, -gapV - bb.x1, 0); }
     for (const side of ['L', 'R']) {
-      if (side === 'L' ? !hasEndL : !hasEndR) continue;
+      if (side === 'L' ? !hasEndL || wantL : !hasEndR || wantR) continue;
       const L = LETTERS[li++ % LETTERS.length];
       const xf = side === 'L' ? -8 : geo.Lt * s + 8, dir = side === 'L' ? 1 : -1;
       const yy = geo.Rmax * s * 0.45 + 4;

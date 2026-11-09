@@ -396,7 +396,7 @@ export function newProject() {
     meta: {
       designation: 'АБВГ.715411.001', name: 'Вал', material: MATERIALS[0], org: '', developer: '', checker: '',
       tcontrol: '', ncontrol: '', approved: '', raGeneral: '6,3', mass: '', litera: '',
-      format: 'авто', scale: 'авто', dims: 'цепь', closing: 'последняя', view: 'вид', sheetMode: 'лист',
+      endViews: 'нет', format: 'авто', scale: 'авто', dims: 'цепь', closing: 'последняя', view: 'вид', sheetMode: 'лист',
       tt: [TT_TEMPLATES[1], TT_TEMPLATES[2]],
     },
     outer: [],
