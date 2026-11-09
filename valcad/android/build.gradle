@@ -27,3 +27,13 @@ allprojects {
 task clean(type: Delete) {
     delete rootProject.buildDir
 }
+
+// Репозитории рекламных сетей для медиации Yandex Mobile Ads («Простая монетизация»)
+allprojects {
+    repositories {
+        maven { url 'https://cboost.jfrog.io/artifactory/chartboost-ads/' }
+        maven { url 'https://artifact.bytedance.com/repository/pangle' }
+        maven { url 'https://dl-maven-android.mintegral.com/repository/mbridge_android_sdk_oversea' }
+        maven { url 'https://dl.appnext.com/' }
+    }
+}

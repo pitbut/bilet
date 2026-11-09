@@ -7,7 +7,7 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 15px/1.35 system-ui, -apple-system, Roboto, "Segoe UI", sans-serif; overscroll-behavior: none; }
 button { font: inherit; color: inherit; }
-#app { display: flex; flex-direction: column; height: 100%; padding-top: var(--top); }
+#app { display: flex; flex-direction: column; height: 100%; padding-top: var(--top); padding-bottom: var(--ad, 0px); }
 #top { display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--panel); border-bottom: 1px solid var(--line); }
 #title { flex: 1; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 15px; }
 .ib { width: 40px; height: 38px; border: 0; border-radius: 10px; background: var(--card); font-size: 20px; }

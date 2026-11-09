@@ -10,6 +10,7 @@ import { drawSheet, sheetToImage } from './render/canvas.js';
 import { toDXF } from './render/dxf.js';
 import { toPDF } from './render/pdf.js';
 import * as P from './platform.js';
+import { initAds, maybeInterstitial } from './ads.js';
 
 const $ = s => document.querySelector(s);
 const h = (tag, attrs = {}, ...kids) => {
@@ -592,7 +593,7 @@ function fileTab() {
         it.id !== st.id ? h('button', { class: 'mini del', onclick: async () => { if (confirm('Удалить проект?')) { await P.deleteProject(it.id); renderPanel(); } } }, '🗑') : null));
     }
   });
-  wrap.append(h('div', { class: 'hint', style: 'margin-top:18px' }, 'ВалCAD 1.1 · чертежи валов по ЕСКД'));
+  wrap.append(h('div', { class: 'hint', style: 'margin-top:18px' }, 'ВалCAD 1.2 · чертежи валов по ЕСКД'));
   return wrap;
 }
 
@@ -611,6 +612,7 @@ async function exportAs(kind, how) {
     else if (kind === 'VAL') { b64 = P.b64FromBytes(new TextEncoder().encode(JSON.stringify(st.project))); mime = 'application/json'; name = base + '.val'; }
     if (how === 'share') await P.shareFile(name, b64, mime, `${m.name} ${m.designation}`);
     else { const r = await P.saveFile(name, b64, mime); toast('Сохранено: ' + r.where, 3500); }
+    maybeInterstitial();
   } catch (e) {
     if (String(e?.message || e).match(/cancel/i)) return;
     console.error(e); toast('Не удалось: ' + (e.message || e), 4000);
@@ -719,4 +721,5 @@ CapApp.addListener('pause', () => P.saveProject(st.id, st.project)).catch(() => 
   renderPanel();
   try { await document.fonts.load('italic 20px GOSTF'); } catch (e) { /* */ }
   build();
+  initAds();
 })();
