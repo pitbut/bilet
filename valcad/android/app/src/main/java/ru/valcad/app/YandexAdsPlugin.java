@@ -43,6 +43,7 @@ public class YandexAdsPlugin extends Plugin {
     public void init(PluginCall call) {
         if (initialized) { call.resolve(); return; }
         getActivity().runOnUiThread(() -> {
+            YandexAds.setLocationTracking(false); // местоположение в рекламу не передаём
             YandexAds.initialize(getContext(), () -> {
                 initialized = true;
                 call.resolve();
