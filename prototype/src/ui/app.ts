@@ -5,7 +5,7 @@ import { BOARD, BRANCH_EFFECTS, BranchId, INDUSTRIES } from "../engine/board";
 import {
   Action, GameConfig, GameEvent, GameState, Result, act, active, buildCost, canBuild, canLounge, canTakeover, capital, companyValue, drainEvents, freeLots,
   INCOME_SHARE, PUBLIC_PROTECT_LOTS, coopAnswer, loanLimit, WORKOFF_DISCOUNT, lotPrice, newGame, ownerLots, rentFor, soldLots,
-  AD, AdKind, AD_REWARD, adRewardWait, DEPOSIT_RATE, bankSaleValue, demolishAskList, voteAskList, controlled, Crisis, DECISION_NAME, Decision, GUARD_COST, LAWYER_UPKEEP, INSURE_ROUNDS, INSPECTION_COST, canOrder, insureCost, isInsured, raidCost, EXPERIENCES, ExpKind, FAME_RENT, LUX, LuxKind, LUX_TAX, EXP_TAX, STASH_MAX, adCost, expCost, fame, luxCost, luxPayback,
+  AD, AdKind, AD_REWARD, totalDebt, debtLimit, adRewardWait, DEPOSIT_RATE, bankSaleValue, demolishAskList, voteAskList, controlled, Crisis, DECISION_NAME, Decision, GUARD_COST, LAWYER_UPKEEP, INSURE_ROUNDS, INSPECTION_COST, canOrder, insureCost, isInsured, raidCost, EXPERIENCES, ExpKind, FAME_RENT, LUX, LuxKind, LUX_TAX, EXP_TAX, STASH_MAX, adCost, expCost, fame, luxCost, luxPayback,
   loanRate, loanShare, luxuryTaxCell,
 } from "../engine/engine";
 import { botStep } from "../engine/runner";
@@ -525,7 +525,8 @@ export class App {
       h("span", { class: "dot", style: `background:${me.color}` }),
       h("span", { class: "name" }, me.name),
       h("span", { class: "money" }, `${fmt(me.money)} млн ₽`),
-      h("span", { class: "muted cap" }, `капитал ${fmt(capital(s, me.id))}`));
+      h("span", { class: "muted cap" }, `капитал ${fmt(capital(s, me.id))}`),
+      totalDebt(s, me.id) ? h("span", { class: "debt", title: `Предел долгов ${fmt(debtLimit(s, me.id))} — дальше банкротство` }, `долг ${fmt(totalDebt(s, me.id))}`) : "");
     const others = button("👥 Игроки", () => this.showPlayers(), "small chipbtn");
     const turn = cur.id !== me.id ? h("div", { class: "chip turnchip" }, h("span", { class: "dot", style: `background:${cur.color}` }), `Ходит ${cur.name}`) : "";
     const offers = s.offers.filter((o) => o.to === me.id).length;
@@ -567,7 +568,7 @@ export class App {
       const head = h("div", { class: `prow${p.id === s.current ? " now" : ""}${p.bankrupt ? " out" : ""}` },
         h("span", { class: "dot", style: `background:${p.color}` }),
         h("div", { class: "pname" }, h("b", {}, p.id === me && p.name !== "Вы" ? `${p.name} (вы)` : p.name), h("div", { class: "muted tiny" },
-          p.bankrupt ? "банкрот" : `${p.bot ? `бот · ${PERS_NAME[p.personality ?? "trader"]}` : "человек"} · клеток ${cells.length} · уровней ${levels}${p.inCasino ? " · в казино" : ""}`),
+          p.bankrupt ? "банкрот" : `${p.bot ? `бот · ${PERS_NAME[p.personality ?? "trader"]}` : "человек"} · клеток ${cells.length} · уровней ${levels}${p.inCasino ? " · в казино" : ""}${totalDebt(s, p.id) ? ` · ⚠ должник: ${fmt(totalDebt(s, p.id))}` : ""}`),
           p.bankrupt || (!p.lux.length && !p.buffs.length) ? "" : h("div", { class: "tiny lux-line" },
             `★${fame(s, p.id)} · ${[...p.lux.map((l) => LUX[l.kind].name), ...p.buffs.map((b) => EXPERIENCES[b.kind].name.toLowerCase())].join(", ")}`)),
         h("div", { class: "pmoney" }, p.id === me ? h("b", {}, `${fmt(p.money)} млн ₽`) : h("span", { class: "muted tiny" }, "деньги скрыты")));
@@ -599,7 +600,8 @@ export class App {
   /** Сделка по чужой компании: выкупить целиком или купить акции у владельца. */
   private showDeal(i: number, reply = "") {
     const s = this.s, c = BOARD[i], p = s.props[i], me = this.meId, pl = s.players[me];
-    if (p.owner === null || p.owner === me) { this.showCell(i); return; }
+    if (p.owner === null || (p.owner === me && !Object.keys(p.holders).length)) { this.showCell(i); return; }
+    const mine = p.owner === me; // своя компания: можно выкупать доли у акционеров
     const owner = s.players[p.owner];
     const myTurn = s.current === me && (s.phase === "roll" || s.phase === "end");
     const value = Math.round(companyValue(s, i) * ownerLots(p) / 10);
@@ -626,12 +628,13 @@ export class App {
     const per = Object.assign(h("input", { type: "number", min: "1", step: "1", class: "price", id: "deal-per" }), { value: String(Math.round(lotPrice(s, i) * 1.1)) });
     const dis = myTurn ? "primary" : "primary disabled";
     this.openModal(
-      h("h2", {}, `«${c.name}» — ${owner.name}`),
+      h("h2", {}, mine ? `«${c.name}» — ваша компания` : `«${c.name}» — ${owner.name}`),
       h("div", { class: "muted" }, `${p.level ? `Уровень ${p.level}` : "Без построек"} · аренда сейчас ${fmt(rentFor(s, i))} · стоимость доли владельца по бирже ≈ ${fmt(value)}`),
       reply ? h("div", { class: `deal-reply${reply.includes("согласен") ? " good" : ""}` }, reply) : "",
-      h("h3", {}, "Выкупить компанию целиком"),
-      h("div", { class: "muted tiny" }, `Компания станет вашей вместе с постройками${soldLots(p) ? `; акционеры (${soldLots(p) * 10}%) останутся при своих долях` : ""}. Свою монополию бот отдаёт очень дорого.`),
-      h("div", { class: "row offerbox" }, whole, h("span", { class: "muted" }, "млн ₽"),
+      mine ? h("div", { class: "muted tiny" }, "Вы управляете компанией. Выкупите доли у акционеров — их дивиденды станут вашими, а с 60% и больше вы решаете всё сами.") : "",
+      mine ? "" : h("h3", {}, "Выкупить компанию целиком"),
+      mine ? "" : h("div", { class: "muted tiny" }, `Компания станет вашей вместе с постройками${soldLots(p) ? `; акционеры (${soldLots(p) * 10}%) останутся при своих долях` : ""}. Свою монополию бот отдаёт очень дорого.`),
+      mine ? "" : h("div", { class: "row offerbox" }, whole, h("span", { class: "muted" }, "млн ₽"),
         button("Предложить выкуп", () => send({ t: "bidCompany", cell: i, price: Number(whole.value) }), dis)),
       h("h3", {}, "Кто владеет акциями"),
       this.shareholders(i, (x) => { this.dealSeller.set(i, x); this.showDeal(i, reply); }),
@@ -641,7 +644,7 @@ export class App {
       seller !== undefined ? h("div", { class: "row offerbox" }, h("span", { class: "muted" }, "у"), sellerSel, lots, h("span", { class: "muted" }, "по"), per, h("span", { class: "muted" }, "за 10%"),
         button("Предложить", () => send({ t: "bidShares", cell: i, lots: Number((lots as HTMLSelectElement).value), price: Number(per.value), seller }), dis)) : "",
       myTurn ? "" : h("div", { class: "hint" }, "Предлагать сделки можно в свой ход — до броска или в конце хода."),
-      s.cfg.realism === "off" ? "" : this.darkMethods(i, myTurn),
+      s.cfg.realism === "off" || mine ? "" : this.darkMethods(i, myTurn),
       h("div", { class: "muted tiny" }, `У вас ${fmt(pl.money)} млн ₽.`),
     );
     this.modal.dataset.view = "deal";
@@ -1489,6 +1492,7 @@ export class App {
       }
       if (p.owner !== null) rows.push(h("div", {}, `Аренда сейчас: ${fmt(rentFor(s, i))} млн ₽`), h("h3", {}, "Кто владеет акциями"), this.shareholders(i));
       if (p.owner !== null && p.owner !== this.meId) rows.push(h("div", { class: "row" }, button("🤝 Предложить сделку", () => this.showDeal(i), "primary")));
+      else if (p.owner === this.meId && Object.keys(p.holders).length) rows.push(h("div", { class: "row" }, button("🤝 Выкупить доли у акционеров", () => this.showDeal(i), "primary")));
     } else {
       const d: Record<string, string> = {
         start: "+200 за круг, +300 за остановку", news: "Карточка новостей", gov: "Карточка госзаказа",
@@ -1537,6 +1541,7 @@ export class App {
         "Не хватает на покупку — «💰 Найти деньги» на карточке: снять со вклада, взять кредит, заложить клетку, продать роскошь.",
         "Не вернули кредит — банк выставляет залог на аукцион: компанию целиком (с постройками), акции — по 10%, пока не покроет долг. Что выручено сверх долга — ваше.",
         "Партия на одном телефоне сохраняется после каждого хода: в меню — «Продолжить партию» или новая игра.",
+        "Не хватает денег на аренду, штраф или налог — платите сколько есть, остальное становится долгом. Все новые деньги сами уходят кредиторам по очереди. Долги больше половины имущества (минимум 300) — процедура банкротства: имущество распродаётся, не хватило — банкрот. Должнику можно помочь: купить у него акции — деньги пойдут на долги.",
         "Акции можно продавать хоть все. Управляет крупнейший акционер; у кого больше 50% — решает сам, иначе стройка, снос, реклама, залог и защита — голосованием долей.",
         "Реализм (настраивается перед партией): проверки, забастовки, пожары, санкции и другие ЧП случаются в любой момент — владельцам звонят, на решение 30 секунд. Расходы делятся по долям.",
         "Защита компании: охрана (от рейдеров), юрист (меньше нарушений), страховка (ремонт после ЧП бесплатно). Конкуренту можно заказать рейдерский захват или проверку — но могут завести дело.",

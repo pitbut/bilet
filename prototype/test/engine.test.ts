@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GameConfig, GameState, act, adCost, controlled, demolishAskList, voteAskList, buildCost, canTakeover, capital, companyValue, fame, handValue, lotPrice, luxCost, newGame, rentFor } from "../src/engine/engine";
+import { GameConfig, GameState, act, adCost, controlled, totalDebt, demolishAskList, voteAskList, buildCost, canTakeover, capital, companyValue, fame, handValue, lotPrice, luxCost, newGame, rentFor } from "../src/engine/engine";
 import { playOut } from "../src/engine/runner";
 
 const players = (n: number, bot = false): GameConfig["players"] =>
@@ -793,5 +793,53 @@ describe("покупка акций у любого акционера", () => {
     expect(act(s, 2, { t: "acceptOffer", id: o.id }).ok).toBe(true);
     expect(s.props[39].holders).toEqual({ 2: 1, 0: 2 });
     expect(act(s, 0, { t: "bidShares", cell: 39, lots: 1, price: 50, seller: 0 }).ok).toBe(false);
+  });
+});
+
+describe("управляющий докупает доли", () => {
+  it("после 50% можно выкупать остальные доли у акционеров", () => {
+    const s = game(3);
+    s.players[2].bot = true; s.players[2].personality = "gambler";
+    s.props[39].owner = 0; s.props[39].holders = { 2: 4 };
+    s.current = 0; s.phase = "end";
+    const lp = lotPrice(s, 39);
+    expect(act(s, 0, { t: "bidShares", cell: 39, lots: 2, price: lp * 2, seller: 2 }).info).toMatch(/согласен/);
+    expect(s.props[39].holders).toEqual({ 2: 2 });
+    expect(act(s, 0, { t: "bidShares", cell: 39, lots: 1, price: lp * 2 }).ok).toBe(false); // у себя — нельзя
+    expect(act(s, 0, { t: "bidCompany", cell: 39, price: 999 }).ok).toBe(false);
+  });
+});
+
+describe("долги", () => {
+  it("не хватило на аренду — долг владельцу; деньги пришли — долг гасится по очереди", () => {
+    const s = game(3);
+    s.props[39].owner = 1; s.props[39].level = 1; s.props[39].branch = "rent"; // аренда 200
+    s.props[37].owner = 2; s.props[37].level = 1; s.props[37].branch = "rent";
+    s.props[1].owner = 0; s.props[3].owner = 0; // имущество, чтобы предел долгов был выше
+    s.players[0].money = 50;
+    s.players[0].pos = 37; roll(s, 1, 0); // «Налог на роскошь» 75 → долг банку 25
+    expect(totalDebt(s, 0)).toBe(25);
+    s.players[0].pos = 37; s.phase = "roll"; roll(s, 1, 1); // Москва: аренда 200
+    act(s, 0, { t: "payRent" });
+    expect(s.players[0].bankrupt).toBe(false);
+    expect(totalDebt(s, 0)).toBe(225);
+    expect(s.players[0].debts!.map((d) => d.to)).toEqual([null, 1]);
+    const m1 = s.players[1].money;
+    s.players[0].money = 0;
+    act(s, 0, { t: "adReward" }); // +100: сначала банку 25, потом 75 игроку 1
+    expect(s.players[0].money).toBe(0);
+    expect(totalDebt(s, 0)).toBe(125);
+    expect(s.players[1].money).toBe(m1 + 75);
+  });
+
+  it("долги выше предела — имущество продаётся, не хватило — банкротство", () => {
+    const s = game(2);
+    s.props[39].owner = 1; s.props[39].level = 3; s.props[39].branch = "rent"; // аренда 1000
+    s.props[1].owner = 0;
+    s.players[0].money = 100;
+    s.players[0].pos = 37; roll(s, 1, 1);
+    act(s, 0, { t: "payRent" });
+    expect(s.players[0].bankrupt).toBe(true);
+    expect(s.props[1].owner).toBe(1);
   });
 });

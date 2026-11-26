@@ -301,3 +301,4 @@ button.danger { background: #b3261e; color: #fff; border-color: #b3261e; }
 .holder .bar > div { height: 100%; }
 .holder .tiny { grid-area: note; }
 .holder button { grid-area: btn; }
+.chip .debt { color: #fff; background: #c62828; border-radius: 8px; padding: 1px 7px; font-weight: 800; font-size: 12px; }

@@ -68,6 +68,8 @@ export interface Player extends PlayerConfig {
   adRound?: number;
   /** Раунд последнего заказа рейдеров или проверки. */
   orderRound?: number;
+  /** Долги по очереди: кому и сколько. Деньги сразу уходят на погашение. */
+  debts?: Debt[];
 }
 
 export type Caller = "bank" | "exchange" | "lawyer" | "union" | "emergency";
@@ -438,7 +440,7 @@ export function capital(s: GameState, pid: number): number {
     if (p.owner === pid) v += companyValue(s, +i) * ownerLots(p) / 10;
     else if (p.holders[pid]) v += p.holders[pid] * lotPrice(s, +i);
   }
-  v -= pl.loans.reduce((a, l) => a + l.amount, 0);
+  v -= pl.loans.reduce((a, l) => a + l.amount, 0) + totalDebt(s, pid);
   v += pl.deposit + pl.stash + pl.lux.reduce((a, l) => a + l.value, 0); // заначка семьи — тоже капитал
   return Math.round(v);
 }
@@ -1160,32 +1162,106 @@ export function canTakeover(s: GameState, pid: number, idx: number): { ok: boole
 
 function give(s: GameState, pid: number, amount: number, reason: string) {
   if (amount === 0) return;
-  s.players[pid].money += amount;
+  const pl = s.players[pid];
+  pl.money += amount;
   emit(s, { type: "money", player: pid, delta: amount, reason });
+  if (amount > 0 && pl.debts?.length) repayDebts(s, pid); // пришли деньги — сразу гасим долги по очереди
 }
 
-/** Списывает деньги; при нехватке закладывает имущество, при полной нехватке — банкротство. */
-function charge(s: GameState, pid: number, amount: number, creditor: number | null, reason: string): boolean {
+// ---------- Долги ----------
+
+/** Долг игрока: кому (null — банку: штрафы, налоги, проценты) и сколько. */
+export interface Debt { to: number | null; amount: number; reason: string }
+export const totalDebt = (s: GameState, pid: number) => (s.players[pid].debts ?? []).reduce((a, d) => a + d.amount, 0);
+
+/** Имущество без наличных: компании, акции, роскошь, вклад, заначка. */
+export function assetsValue(s: GameState, pid: number): number {
+  const pl = s.players[pid];
+  let v = pl.deposit + pl.stash + pl.lux.reduce((a, l) => a + l.value, 0);
+  for (const [i, p] of Object.entries(s.props)) {
+    if (p.owner === pid) v += companyValue(s, +i) * ownerLots(p) / LOTS;
+    else if (p.holders[pid]) v += p.holders[pid] * lotPrice(s, +i);
+  }
+  return Math.round(v);
+}
+
+/** Предел долгов: больше — процедура банкротства. Половина имущества, но не меньше 300. */
+export const debtLimit = (s: GameState, pid: number) => Math.max(300, Math.round(assetsValue(s, pid) * 0.5));
+
+/** Деньги пришли — расходятся по кредиторам по очереди, кто первый дал в долг, тот первый получает. */
+function repayDebts(s: GameState, pid: number) {
+  const pl = s.players[pid];
+  while (pl.money > 0 && pl.debts?.length) {
+    const d = pl.debts[0];
+    if (d.to !== null && s.players[d.to].bankrupt) { pl.debts.shift(); continue; } // кредитор выбыл — долг списан
+    const x = Math.min(pl.money, d.amount);
+    pl.money -= x;
+    emit(s, { type: "money", player: pid, delta: -x, reason: `погашение долга${d.to !== null ? ` ${s.players[d.to].name}` : " банку"}` });
+    d.amount -= x;
+    if (d.amount <= 0) {
+      pl.debts.shift();
+      log(s, `${pl.name} погасил долг${d.to !== null ? ` перед ${s.players[d.to].name}` : " банку"}`);
+    }
+    if (d.to !== null) give(s, d.to, x, `возврат долга от ${pl.name}`);
+  }
+}
+
+/** Платит сколько может (с вклада и из заначки тоже); остаток — долг кредитору. Возвращает, сколько заплачено сразу. */
+function pay(s: GameState, pid: number, amount: number, creditor: number | null, reason: string): number {
   const pl = s.players[pid];
   amount = Math.round(amount);
-  if (pl.money < amount) raiseFunds(s, pid, amount);
-  if (pl.money >= amount) {
-    give(s, pid, -amount, reason);
-    if (creditor !== null) give(s, creditor, amount, reason);
-    return true;
+  if (amount <= 0 || pl.bankrupt) return 0;
+  if (pl.money < amount && pl.deposit > 0) { // сначала снимаем вклад
+    const k = Math.min(pl.deposit, amount - pl.money);
+    pl.deposit -= k; pl.money += k;
+    emit(s, { type: "money", player: pid, delta: k, reason: "снятие со вклада" });
   }
-  bankrupt(s, pid, creditor);
-  return false;
+  if (pl.money < amount && pl.stash > 0) { // семья выручает
+    const k = Math.min(pl.stash, amount - pl.money);
+    pl.stash -= k; pl.money += k;
+    emit(s, { type: "money", player: pid, delta: k, reason: "семья выручила" });
+  }
+  const paid = Math.max(0, Math.min(pl.money, amount));
+  if (paid > 0) { give(s, pid, -paid, reason); if (creditor !== null) give(s, creditor, paid, reason); }
+  const rest = amount - paid;
+  if (rest > 0) {
+    (pl.debts ??= []).push({ to: creditor, amount: rest, reason });
+    const who = creditor !== null ? s.players[creditor].name : "банку";
+    stockEvent(s, `${pl.name} не хватило денег: долг ${rest} ${creditor !== null ? who : "банку"} (${reason})`, creditor !== null ? [pid, creditor] : [pid]);
+    call(s, pid, "bank", `Не хватило денег: ${reason}. Долг ${rest} миллионов ${creditor !== null ? `перед ${who}` : "банку"}. Как только у вас появятся деньги, они сами уйдут кредиторам по очереди. Если долги превысят ${debtLimit(s, pid)}, начнётся процедура банкротства.`);
+    checkDebt(s, pid);
+  }
+  return paid;
+}
+
+/** Списывает деньги; не хватает — долг. Возвращает false, только если игрок обанкротился. */
+function charge(s: GameState, pid: number, amount: number, creditor: number | null, reason: string): boolean {
+  pay(s, pid, amount, creditor, reason);
+  return !s.players[pid].bankrupt;
+}
+
+/** Процедура банкротства: долги выше предела — имущество распродаётся в пользу кредиторов; не хватило — банкрот. */
+function checkDebt(s: GameState, pid: number) {
+  const pl = s.players[pid];
+  if (pl.bankrupt || totalDebt(s, pid) <= debtLimit(s, pid)) return;
+  stockEvent(s, `Процедура банкротства: долги ${pl.name} (${totalDebt(s, pid)}) превысили предел — имущество продаётся в счёт долгов`, [pid]);
+  raiseFunds(s, pid, totalDebt(s, pid)); // деньги от продаж сразу уходят кредиторам
+  if (totalDebt(s, pid) > debtLimit(s, pid)) { // всё продали, а долги всё ещё выше предела
+    const main = [...(pl.debts ?? [])].sort((a, b) => b.amount - a.amount)[0];
+    bankrupt(s, pid, main?.to ?? null);
+  }
 }
 
 function raiseFunds(s: GameState, pid: number, need: number) {
   const pl = s.players[pid];
+  const target = pl.money + need; // при долгах деньги сразу уходят кредиторам — считаем по сумме долга
+  const done = () => (pl.debts?.length ? totalDebt(s, pid) <= 0 : pl.money >= Math.min(need, target));
   if (pl.deposit > 0) { // сначала снимаем вклад
     const k = Math.min(pl.deposit, need - pl.money);
     pl.deposit -= k;
     give(s, pid, k, "снятие со вклада");
   }
-  if (pl.money < need && pl.stash > 0) { // семья выручает
+  if (!done() && pl.stash > 0) { // семья выручает
     const k = Math.min(pl.stash, need - pl.money);
     pl.stash -= k;
     give(s, pid, k, "семья выручила");
@@ -1193,40 +1269,40 @@ function raiseFunds(s: GameState, pid: number, need: number) {
   }
   // срочная продажа роскоши: дешёвое — первым, за 70% цены
   for (const it of [...pl.lux].sort((a, b) => a.value - b.value)) {
-    if (pl.money >= need) return;
+    if (done()) return;
     pl.lux = pl.lux.filter((x) => x !== it);
     give(s, pid, Math.round(it.value * 0.7), `срочная продажа: ${LUX[it.kind].name}`);
   }
-  if (pl.money >= need) return;
+  if (done()) return;
   const mine = Object.entries(s.props).filter(([, p]) => p.owner === pid).map(([i, p]) => ({ i: +i, p }));
   for (const { i, p } of mine) { // отменяем стройки — без возврата
-    if (pl.money >= need) return;
+    if (done()) return;
     if (p.construction) { p.construction = null; log(s, `${pl.name}: стройка в «${cell(i).name}» остановлена`); }
   }
   // срочная продажа чужих акций: компания выкупает их за 80% цены
   for (const [i, p] of Object.entries(s.props)) {
-    while (pl.money < need && (p.holders[pid] ?? 0) > 0) {
+    while (!done() && (p.holders[pid] ?? 0) > 0) {
       give(s, pid, Math.round(lotPrice(s, +i) * 0.8), `срочная продажа акций «${cell(+i).name}»`);
       p.holders[pid] -= 1;
       if (p.holders[pid] <= 0) delete p.holders[pid];
       p.listings = p.listings.filter((l) => l.seller !== pid || (p.holders[pid] ?? 0) >= l.lots);
       p.demand *= 0.95; clampDemand(p);
     }
-    if (pl.money >= need) return;
+    if (done()) return;
   }
   for (const { i } of mine.filter((x) => x.p.level === 0 && !x.p.mortgaged)) {
-    if (pl.money >= need) return;
+    if (done()) return;
     mortgage(s, pid, i);
   }
   for (const { i, p } of mine.sort((a, b) => b.p.level - a.p.level)) {
-    while (pl.money < need && p.level > 0) {
+    while (!done() && p.level > 0) {
       const refund = Math.round(p.invested / p.level / 2);
       p.invested -= Math.round(p.invested / p.level);
       p.level -= 1;
       if (p.level === 0) { p.branch = null; p.invested = 0; }
       give(s, pid, refund, `снос уровня в «${cell(i).name}»`);
     }
-    if (pl.money >= need) return;
+    if (done()) return;
     if (!p.mortgaged) mortgage(s, pid, i);
   }
 }
@@ -1244,7 +1320,7 @@ function bankrupt(s: GameState, pid: number, creditor: number | null) {
   pl.bankrupt = true;
   s.offers = s.offers.filter((o) => o.from !== pid && o.to !== pid);
   pl.loans = [];
-  pl.lux = []; pl.buffs = []; pl.deposit = 0; pl.stash = 0;
+  pl.lux = []; pl.buffs = []; pl.deposit = 0; pl.stash = 0; pl.debts = [];
   for (const [i, p] of Object.entries(s.props)) {
     p.listings = p.listings.filter((l) => l.seller !== pid);
     const held = p.holders[pid];
@@ -1859,12 +1935,14 @@ export function act(s: GameState, pid: number, a: Action): Result {
       const { cell: idx, owner, amount } = s.pending;
       const p = s.props[idx];
       if (a.t === "payRent") {
-        if (charge(s, pid, amount, owner, `аренда «${cell(idx).name}»`)) shareOut(s, idx, amount, "аренда");
+        const paid = pay(s, pid, amount, owner, `аренда «${cell(idx).name}»`);
+        if (paid > 0) shareOut(s, idx, paid, "аренда");
         p.fastBonus = false;
         log(s, `${pl.name} платит аренду ${amount} → ${s.players[owner].name}`);
       } else {
         const part = Math.round(amount * (1 - WORKOFF_DISCOUNT));
-        if (charge(s, pid, part, owner, `аренда со скидкой «${cell(idx).name}»`)) shareOut(s, idx, part, "аренда");
+        const paid = pay(s, pid, part, owner, `аренда со скидкой «${cell(idx).name}»`);
+        if (paid > 0) shareOut(s, idx, paid, "аренда");
         if (p.construction) addProgress(s, idx, 20);
         pl.skipNext = true;
         log(s, `${pl.name} отрабатывает: платит ${part} вместо ${amount} и пропустит ход`);
@@ -2047,8 +2125,9 @@ export function act(s: GameState, pid: number, a: Action): Result {
     case "bidShares": case "bidCompany": {
       if (s.phase !== "roll" && s.phase !== "end") return { ok: false, error: "Предложения — до броска или в конце хода" };
       const p = s.props[a.cell];
-      if (!p || p.owner === null || p.owner === pid) return { ok: false, error: "Это не чужая компания" };
       const whole = a.t === "bidCompany";
+      // управляющий может выкупать доли у своих акционеров; целиком — только чужую компанию
+      if (!p || p.owner === null || (p.owner === pid && (whole || a.seller === undefined || a.seller === pid))) return { ok: false, error: "Это не чужая компания" };
       // купить акции можно у любого акционера, компанию целиком — только у управляющего
       const sellerId = !whole && a.t === "bidShares" && a.seller !== undefined ? a.seller : p.owner;
       if (sellerId === pid) return { ok: false, error: "Это ваши акции" };
