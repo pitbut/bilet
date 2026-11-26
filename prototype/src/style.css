@@ -302,3 +302,10 @@ button.danger { background: #b3261e; color: #fff; border-color: #b3261e; }
 .holder .tiny { grid-area: note; }
 .holder button { grid-area: btn; }
 .chip .debt { color: #fff; background: #c62828; border-radius: 8px; padding: 1px 7px; font-weight: 800; font-size: 12px; }
+/* ---------- Обучение ---------- */
+.tut-hand { position: absolute; z-index: 8; font-size: 46px; pointer-events: none; filter: drop-shadow(0 3px 6px rgba(0,0,0,.45)); animation: tutpoke 0.9s ease-in-out infinite; }
+.tut-hand.up { transform: rotate(180deg); animation-name: tutpokeup; }
+@keyframes tutpoke { 0%, 100% { translate: 0 0; } 50% { translate: 0 -12px; } }
+@keyframes tutpokeup { 0%, 100% { translate: 0 0; } 50% { translate: 0 12px; } }
+.tut-bubble { position: absolute; z-index: 8; background: #fffdf5; color: #222; border: 2px solid #e8c15a; border-radius: 14px; padding: 10px 12px; box-shadow: 0 8px 24px rgba(0,0,0,.3); font-size: 15px; line-height: 1.35; display: grid; gap: 8px; }
+.tut-bubble .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }

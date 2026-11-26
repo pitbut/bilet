@@ -16,6 +16,7 @@ import { clearSave, saveGame } from "./save";
 import { CALLERS, showCall } from "./call";
 import { APP_VERSION } from "../version";
 import { initAds, showInterstitial, showRewarded } from "./ads";
+import { Tutorial, tutorialDone } from "./tutorial";
 
 export type Speed = "normal" | "fast" | "instant";
 const SPEED = { normal: { hop: 0.42, bot: 800 }, fast: { hop: 0.2, bot: 350 }, instant: { hop: 0, bot: 60 } };
@@ -131,7 +132,13 @@ export class App {
     await this.scene.sync(this.s);
     this.render();
     this.fitLater();
+    if (!tutorialDone()) this.startTutorial();
     void this.step();
+  }
+
+  /** Обучение в первой партии: рука показывает, куда нажимать. */
+  private startTutorial() {
+    new Tutorial(this.ui, () => this.s, () => this.meId).run();
   }
 
   /** Продолжить сохранённую партию (один телефон). */
@@ -1516,7 +1523,8 @@ export class App {
         })),
       this.net ? "" : h("div", { class: "muted tiny" }, "Партия сохраняется сама после каждого хода. Выйдите — и в меню будет «Продолжить партию»."),
       h("div", { class: "muted tiny" }, `Версия ${APP_VERSION}`),
-      h("div", { class: "row" }, button("Правила", () => this.showRules()), button(this.net ? "Выйти в меню" : "Сохранить и выйти", () => { if (!this.net && this.s.phase !== "gameover") saveGame(this.s, this.speed); this.closeModal(); this.onExit(); }, "ghost")));
+      h("div", { class: "row" }, button("👆 Обучение", () => { this.closeModal(); this.startTutorial(); }),
+        button("Правила", () => this.showRules()), button(this.net ? "Выйти в меню" : "Сохранить и выйти", () => { if (!this.net && this.s.phase !== "gameover") saveGame(this.s, this.speed); this.closeModal(); this.onExit(); }, "ghost")));
   }
 
   private showRules() {
