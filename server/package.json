@@ -1,0 +1,11 @@
+{
+  "name": "oligarh-rooms",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Сервер комнат «Олигарха»: пересылает ходы между телефонами (игру ведёт телефон хозяина стола)",
+  "type": "module",
+  "main": "relay.mjs",
+  "scripts": { "start": "node relay.mjs", "test": "node --test" },
+  "dependencies": { "ws": "^8.18.0" },
+  "engines": { "node": ">=18" }
+}

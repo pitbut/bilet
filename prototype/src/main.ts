@@ -3,7 +3,7 @@ import { GameConfig, Personality } from "./engine/engine";
 import { App, PERSONALITY_NAMES, Speed } from "./ui/app";
 import { unlockAudio } from "./ui/sound";
 import { NetClient, NetHost } from "./net/session";
-import { FoundTable, pickDriver } from "./net/transport";
+import { FoundTable, NetDriver, Transport, localDriver, onlineDriver, useDriver } from "./net/transport";
 import { clearSave, loadGame } from "./ui/save";
 import { APP_VERSION } from "./version";
 
@@ -16,7 +16,7 @@ const BOT_NAMES = ["Борис", "Семён", "Гена", "Тимур", "Оле
 
 const root = document.getElementById("app")!;
 
-interface Setup { mode: "solo" | "hotseat" | "network"; length: "quick" | "classic"; humans: string[]; bots: number; difficulty: "easy" | "normal" | "hard"; speed: Speed; startCompanies?: boolean; realism?: "off" | "normal" | "hard" }
+interface Setup { mode: "solo" | "hotseat" | "network"; length: "quick" | "classic"; humans: string[]; bots: number; difficulty: "easy" | "normal" | "hard"; speed: Speed; startCompanies?: boolean; realism?: "off" | "normal" | "hard"; link?: "local" | "online" }
 const saved = (() => { try { return JSON.parse(localStorage.getItem("oligarh-setup") ?? "null") as Setup | null; } catch { return null; } })();
 const setup: Setup = saved ?? { mode: "solo", length: "quick", humans: ["Вы"], bots: 3, difficulty: "normal", speed: "normal" };
 
@@ -44,7 +44,7 @@ function field(label: string, ...kids: Node[]) {
 }
 
 function modeField() {
-  return field("Режим", seg(setup.mode, [["solo", "Один против ботов"], ["hotseat", "Несколько на одном телефоне"], ["network", "Несколько телефонов"]], (v) => { setup.mode = v; }));
+  return field("Режим", seg(setup.mode, [["solo", "Один против ботов"], ["hotseat", "Несколько на одном телефоне"], ["network", "Несколько телефонов / по сети"]], (v) => { setup.mode = v; }));
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = "", text = "") {
@@ -56,9 +56,10 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = "", text = "") 
 function btn(text: string, on: () => void, cls = "") { const b = el("button", cls, text); b.onclick = on; return b; }
 function save() { try { localStorage.setItem("oligarh-setup", JSON.stringify(setup)); } catch { /* приватный режим */ } }
 
-const driver = pickDriver();
+const near = localDriver();
+let driver: NetDriver = near;
 
-/** Сетевая игра: имя и кнопки «Создать стол» / «Найти стол». */
+/** Сетевая игра: имя, связь (рядом / интернет) и кнопки «Создать стол» / «Найти стол». */
 function renderNetworkSetup(box: HTMLElement) {
   box.append(modeField());
   const name = el("input");
@@ -67,12 +68,18 @@ function renderNetworkSetup(box: HTMLElement) {
   name.oninput = () => { setup.humans[0] = name.value || "Игрок"; };
   const names = el("div", "names"); names.append(name);
   box.append(field("Ваше имя", names));
+  const link = setup.link ?? "online";
+  driver = link === "online" ? onlineDriver() : near;
+  useDriver(driver);
+  box.append(field("Связь", seg(link, [["online", "🌐 Через интернет"], ["local", near.kind === "bluetooth" ? "📶 Рядом, Bluetooth" : "🗂 Вкладки (тест)"]], (v) => { setup.link = v; save(); }),
+    el("div", "netlabel", link === "online"
+      ? "Друзья могут быть в других городах. Хозяин создаёт комнату и сообщает код из 4 цифр, остальные входят по коду или выбирают комнату из списка."
+      : near.kind === "bluetooth"
+        ? "Bluetooth: телефоны рядом, интернет не нужен. Один создаёт стол, остальные его находят."
+        : near.label + ". Откройте игру в нескольких вкладках: в одной создайте стол, в других найдите его.")));
   box.append(field("Анимация на этом телефоне", seg(setup.speed, [["normal", "Обычная"], ["fast", "Быстрая"], ["instant", "Мгновенно"]], (v) => { setup.speed = v; })));
-  box.append(field("Связь", el("div", "netlabel", driver.kind === "bluetooth"
-    ? "Bluetooth: телефоны рядом, интернет не нужен. Один создаёт стол, остальные его находят."
-    : driver.label + ". Откройте игру в нескольких вкладках: в одной создайте стол, в других найдите его.")));
   const row = el("div", "netbtns");
-  row.append(btn("Создать стол", () => { save(); void hostLobby(); }, "primary big"), btn("Найти стол", () => { save(); void findTables(); }, "big ghostlight"));
+  row.append(btn(link === "online" ? "Создать комнату" : "Создать стол", () => { save(); void hostLobby(); }, "primary big"), btn(link === "online" ? "Войти в комнату" : "Найти стол", () => { save(); void findTables(); }, "big ghostlight"));
   box.append(row);
   root.append(box);
 }
@@ -95,12 +102,23 @@ function seatList(seats: { name: string; kind: string }[]) {
 /** Хозяин стола: ждём гостей, выбираем ботов и длину, начинаем. */
 async function hostLobby() {
   const myName = setup.humans[0] ?? "Хозяин";
-  let tr;
-  try { tr = await driver.host(`Стол ${myName}`); } catch (e) { const b = screen("Не удалось создать стол", String(e)); b.append(btn("Назад", () => renderSetup(), "big ghostlight")); return; }
+  let tr: Transport;
+  screen(driver.kind === "online" ? "Создаём комнату…" : "Открываем стол…");
+  try { tr = await driver.host(`Стол ${myName}`); } catch (e) { const b = screen("Не удалось создать стол", errText(e)); b.append(btn("Назад", () => renderSetup(), "big ghostlight")); return; }
   const host = new NetHost(tr, myName, `Стол ${myName}`);
   const draw = () => {
-    const box = screen(`Ваш стол: «Стол ${myName}»`, driver.kind === "bluetooth" ? "Пусть остальные нажмут «Найти стол» — телефон виден по Bluetooth." : "В другой вкладке выберите «Несколько телефонов» → «Найти стол».");
+    const box = screen(`Ваш стол: «Стол ${myName}»`, driver.kind === "online" ? "Сообщите друзьям код комнаты: «Несколько телефонов» → «Через интернет» → «Войти в комнату»." : driver.kind === "bluetooth" ? "Пусть остальные нажмут «Найти стол» — телефон виден по Bluetooth." : "В другой вкладке выберите «Несколько телефонов» → «Найти стол».");
+    if (tr.code) {
+      const code = el("div", "roomcode", tr.code);
+      const share = btn("📤 Отправить код", () => {
+        const text = `Заходи в «Олигарх»: Несколько телефонов → Через интернет → Войти в комнату, код ${tr.code}`;
+        const nav = navigator as Navigator & { share?: (d: { text: string }) => Promise<void> };
+        if (nav.share) void nav.share({ text }).catch(() => {}); else void navigator.clipboard?.writeText(text).then(() => { share.textContent = "Скопировано ✓"; });
+      }, "ghostlight");
+      box.append(field("Код комнаты", code, share));
+    }
     const humans = host.seats();
+    tr.meta?.(humans.length, false);
     const maxBots = 6 - humans.length;
     setup.bots = Math.min(setup.bots, maxBots);
     const bots: { name: string; kind: string }[] = Array.from({ length: setup.bots }, (_, k) => ({ name: `${PERSONALITY_NAMES[PERS[k % 4]]} ${BOT_NAMES[k]}`, kind: "bot" }));
@@ -134,31 +152,49 @@ function startHost(host: NetHost) {
     players.push({ name: `${PERSONALITY_NAMES[pers]} ${BOT_NAMES[k]}`, bot: true, personality: pers, difficulty: setup.difficulty, token: "", color: "" });
   }
   players.forEach((p, i) => { p.token = TOKENS[i]; p.color = COLORS[i]; });
+  host.markStarted(players.length);
   root.replaceChildren();
   const app = new App(root, () => { host.close(); location.reload(); });
   void app.start({ players, mode: "network", length: setup.length, startCompanies: !!setup.startCompanies, realism: setup.realism ?? "normal" }, setup.speed, host);
 }
 
-/** Гость: ищем столы рядом. */
+const errText = (e: unknown) => e instanceof Error ? e.message : String(e);
+
+/** Гость: ищем столы рядом или комнаты в интернете. */
 async function findTables() {
-  const box = screen("Ищем столы рядом…", driver.kind === "bluetooth" ? "Включите Bluetooth. Хозяин стола должен нажать «Создать стол»." : "Столы из других вкладок появятся здесь.");
-  const list = el("div", "tables");
-  box.append(list, btn("Назад", () => { stop(); renderSetup(); }, "big ghostlight"));
-  const found = new Map<string, FoundTable>();
+  const online = driver.kind === "online";
+  const box = screen(online ? "Вход в комнату" : "Ищем столы рядом…", online ? "Введите код, который назвал хозяин, или выберите открытую комнату." : driver.kind === "bluetooth" ? "Включите Bluetooth. Хозяин стола должен нажать «Создать стол»." : "Столы из других вкладок появятся здесь.");
   let stop = () => {};
+  if (online) {
+    const code = el("input", "codeinput");
+    code.inputMode = "numeric"; code.maxLength = 4; code.placeholder = "0000";
+    const go = btn("Войти", () => { const c = code.value.trim(); if (/^\d{4}$/.test(c)) { stop(); void join({ id: c, name: `комната ${c}` }); } else code.focus(); }, "primary big");
+    code.onkeydown = (e) => { if (e.key === "Enter") go.click(); };
+    const r = el("div", "names"); r.append(code);
+    box.append(field("Код комнаты", r, go));
+    setTimeout(() => code.focus(), 50);
+  }
+  const list = el("div", "tables");
+  const empty = el("p", "muted small", online ? "Открытых комнат пока нет." : "");
+  box.append(field(online ? "Открытые комнаты" : "Столы", list, empty), btn("Назад", () => { stop(); renderSetup(); }, "big ghostlight"));
+  const found = new Map<string, HTMLElement>();
   try {
     stop = await driver.scan((t) => {
-      if (found.has(t.id)) return;
-      found.set(t.id, t);
-      list.append(btn(`🎲 ${t.name}`, () => { stop(); void join(t); }, "big tablebtn"));
+      empty.remove();
+      const label = `🎲 ${t.name}${t.players ? ` · ${t.players} чел.` : ""}${online ? ` · ${t.id}` : ""}`;
+      const old = found.get(t.id);
+      if (old) { old.textContent = label; return; }
+      const b = btn(label, () => { stop(); void join(t); }, "big tablebtn");
+      found.set(t.id, b);
+      list.append(b);
     });
-  } catch (e) { box.append(el("p", "muted", `Поиск не удался: ${String(e)}`)); }
+  } catch (e) { box.append(el("p", "muted", `Поиск не удался: ${errText(e)}`)); }
 }
 
 async function join(t: FoundTable) {
   const box = screen(`Подключаемся к «${t.name}»…`);
   let tr;
-  try { tr = await driver.join(t.id); } catch (e) { box.append(el("p", "muted", `Не удалось подключиться: ${String(e)}`), btn("Назад", () => renderSetup(), "big ghostlight")); return; }
+  try { tr = await driver.join(t.id); } catch (e) { box.append(el("p", "muted", `Не удалось подключиться: ${errText(e)}`), btn("Назад", () => renderSetup(), "big ghostlight")); return; }
   const client = new NetClient(tr, setup.humans[0] ?? "Гость");
   const wait = () => {
     const b = screen(`Вы за столом «${t.name}»`, "Ждём, пока хозяин начнёт игру…");

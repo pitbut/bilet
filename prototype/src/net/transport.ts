@@ -8,12 +8,20 @@ export interface Transport {
   /** Подключился / отключился участник (у гостя peer = "host"). */
   onPeer: (peer: string, up: boolean) => void;
   close(): void;
+  /** Интернет: код комнаты, который хозяин диктует друзьям. */
+  code?: string;
+  /** Интернет: сообщить серверу, сколько за столом и началась ли игра (началась — стол не виден в списке). */
+  meta?(players: number, started: boolean): void;
+  /** Интернет, гость: связь восстановилась после обрыва — надо снова представиться хозяину. */
+  onResume?: () => void;
+  /** Интернет, гость: связь не восстановилась (у самого гостя нет интернета). */
+  onFail?: (why: string) => void;
 }
 
-export interface FoundTable { id: string; name: string }
+export interface FoundTable { id: string; name: string; players?: number }
 
 export interface NetDriver {
-  kind: "bluetooth" | "tabs";
+  kind: "bluetooth" | "tabs" | "online";
   label: string;
   host(tableName: string): Promise<Transport>;
   /** Поиск столов; возвращает функцию остановки поиска. */
@@ -165,9 +173,204 @@ export class BluetoothDriver implements NetDriver {
   }
 }
 
+// ---------- Интернет (сервер комнат, см. server/relay.mjs) ----------
+
+const CONFIG_URL = "https://pitbut.github.io/oligarh-config.json";
+const DEFAULT_RELAY = "wss://oligarh.robutpit.com";
+let relayUrl: Promise<string> | null = null;
+
+/** Адрес сервера берём с сайта: его можно поменять без обновления приложения. */
+export function relay(): Promise<string> {
+  if (!relayUrl) relayUrl = (async () => {
+    try { const o = localStorage.getItem("oligarh-relay"); if (o) return o; } catch { /* нет хранилища */ }
+    try {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 4000);
+      const r = await fetch(CONFIG_URL, { cache: "no-store", signal: ctl.signal });
+      clearTimeout(t);
+      const j = await r.json() as { relay?: string };
+      if (j.relay) { try { localStorage.setItem("oligarh-relay-cache", j.relay); } catch { /* */ } return j.relay; }
+    } catch { /* нет сети или сайта — берём сохранённый */ }
+    try { const c = localStorage.getItem("oligarh-relay-cache"); if (c) return c; } catch { /* */ }
+    return DEFAULT_RELAY;
+  })();
+  return relayUrl;
+}
+
+type RelayMsg =
+  | { op: "hosted"; room: string; key: string; peers?: number[] }
+  | { op: "joined"; room: string; name: string }
+  | { op: "rooms"; rooms: { room: string; name: string; players: number; started: boolean }[] }
+  | { op: "error"; text: string }
+  | { op: "peer"; peer: number; up: boolean }
+  | { op: "data"; peer?: number; d: string }
+  | { op: "closed" }
+  | { op: "pong" };
+
+async function openSocket(): Promise<WebSocket> {
+  const url = await relay();
+  return new Promise((resolve, reject) => {
+    let ws: WebSocket;
+    try { ws = new WebSocket(url); } catch (e) { reject(e); return; }
+    const t = setTimeout(() => { ws.close(); reject(new Error("Сервер не отвечает. Проверьте интернет.")); }, 8000);
+    ws.onopen = () => { clearTimeout(t); resolve(ws); };
+    ws.onerror = () => { clearTimeout(t); reject(new Error("Нет связи с сервером. Проверьте интернет.")); };
+  });
+}
+
+const wsSend = (ws: WebSocket, m: object) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); };
+
+/** Ждём первый ответ нужного вида (или ошибку). */
+function reply<T extends RelayMsg["op"]>(ws: WebSocket, op: T): Promise<Extract<RelayMsg, { op: T }>> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error("Сервер не отвечает")), 8000);
+    const on = (e: MessageEvent) => {
+      const m = JSON.parse(String(e.data)) as RelayMsg;
+      if (m.op === op || m.op === "error") {
+        clearTimeout(t);
+        ws.removeEventListener("message", on);
+        if (m.op === "error") reject(new Error(m.text)); else resolve(m as Extract<RelayMsg, { op: T }>);
+      }
+    };
+    ws.addEventListener("message", on);
+  });
+}
+
+/** Держим соединение живым (мобильные сети рвут молчащие сокеты) и замечаем обрыв. */
+function keepAlive(ws: WebSocket, lost: () => void) {
+  let last = Date.now();
+  ws.addEventListener("message", () => { last = Date.now(); });
+  const timer = setInterval(() => {
+    wsSend(ws, { op: "ping" });
+    if (Date.now() - last > 25000) ws.close();
+  }, 8000);
+  ws.addEventListener("close", () => { clearInterval(timer); lost(); });
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Сколько пытаемся вернуться в комнату после обрыва (сервер ждёт хозяина 30 с). */
+const RETRY_MS = 25000;
+
+export class OnlineDriver implements NetDriver {
+  kind = "online" as const;
+  label = "Интернет";
+
+  async host(tableName: string): Promise<Transport> {
+    let ws = await openSocket();
+    wsSend(ws, { op: "host", name: tableName });
+    const { room, key } = await reply(ws, "hosted");
+    const peers = new Set<string>();
+    let closing = false, meta: [number, boolean] = [1, false];
+    const t = makeTransport(
+      (peer, d) => wsSend(ws, { op: "to", peer: Number(peer), d }),
+      () => { closing = true; wsSend(ws, { op: "bye" }); ws.close(); },
+    );
+    t.code = room;
+    t.meta = (players, started) => { meta = [players, started]; wsSend(ws, { op: "meta", players, started }); };
+    const wire = (sock: WebSocket) => {
+      sock.addEventListener("message", (e) => {
+        const m = JSON.parse(String(e.data)) as RelayMsg;
+        if (m.op === "peer") { const p = String(m.peer); if (m.up) peers.add(p); else peers.delete(p); t.onPeer(p, m.up); }
+        else if (m.op === "data" && m.peer !== undefined) t.onData(String(m.peer), m.d);
+      });
+      keepAlive(sock, () => { if (!closing && sock === ws) void resume(); });
+    };
+    // Обрыв у хозяина: возвращаемся в ту же комнату, гости ничего не заметят.
+    const resume = async () => {
+      const until = Date.now() + RETRY_MS;
+      while (!closing && Date.now() < until) {
+        try {
+          const sock = await openSocket();
+          wsSend(sock, { op: "rehost", room, key });
+          const r = await reply(sock, "hosted");
+          ws = sock;
+          wire(sock);
+          wsSend(sock, { op: "meta", players: meta[0], started: meta[1] });
+          const now = new Set((r.peers ?? []).map(String));
+          for (const p of [...peers]) if (!now.has(p)) { peers.delete(p); t.onPeer(p, false); }
+          for (const p of now) if (!peers.has(p)) { peers.add(p); t.onPeer(p, true); }
+          return;
+        } catch (e) {
+          if (e instanceof Error && e.message === "Комната уже закрыта") break;
+          await sleep(2000);
+        }
+      }
+      // Не вернулись: для гостей хозяин ушёл (у них сработает передача стола).
+      for (const p of [...peers]) { peers.delete(p); t.onPeer(p, false); }
+    };
+    wire(ws);
+    return t;
+  }
+
+  async scan(onFound: (t: FoundTable) => void) {
+    let stopped = false;
+    const ws = await openSocket();
+    ws.addEventListener("message", (e) => {
+      const m = JSON.parse(String(e.data)) as RelayMsg;
+      if (m.op === "rooms") for (const r of m.rooms) onFound({ id: r.room, name: r.name, players: r.players });
+    });
+    const poll = () => wsSend(ws, { op: "list" });
+    poll();
+    const timer = setInterval(poll, 2000);
+    return () => { if (stopped) return; stopped = true; clearInterval(timer); ws.close(); };
+  }
+
+  async join(room: string): Promise<Transport> {
+    let ws = await openSocket();
+    wsSend(ws, { op: "join", room });
+    await reply(ws, "joined");
+    let closing = false, gone = false;
+    const hostGone = () => { if (!gone && !closing) { gone = true; t.onPeer("host", false); } };
+    const t = makeTransport(
+      (_peer, d) => wsSend(ws, { op: "to", d }),
+      () => { closing = true; wsSend(ws, { op: "bye" }); ws.close(); },
+    );
+    t.code = room;
+    const wire = (sock: WebSocket) => {
+      sock.addEventListener("message", (e) => {
+        const m = JSON.parse(String(e.data)) as RelayMsg;
+        if (m.op === "data") t.onData("host", m.d);
+        else if (m.op === "closed") { gone = true; closing = true; t.onPeer("host", false); }
+      });
+      keepAlive(sock, () => { if (!closing && sock === ws) void resume(); });
+    };
+    // Обрыв у гостя: входим в комнату заново, хозяин узнает нас по имени.
+    const resume = async () => {
+      const until = Date.now() + RETRY_MS;
+      let reached = false;
+      while (!closing && Date.now() < until) {
+        let sock: WebSocket;
+        try { sock = await openSocket(); } catch { await sleep(2000); continue; }
+        reached = true;
+        try {
+          wsSend(sock, { op: "join", room });
+          await reply(sock, "joined");
+        } catch { sock.close(); hostGone(); return; } // комнаты нет — хозяин действительно ушёл
+        ws = sock;
+        wire(sock);
+        t.onResume?.();
+        return;
+      }
+      if (closing) return;
+      if (!reached && t.onFail) { closing = true; t.onFail("Пропал интернет. Когда связь вернётся, войдите в комнату " + room + " снова — вас вернут на ваше место."); }
+      else hostGone();
+    };
+    wire(ws);
+    setTimeout(() => t.onPeer("host", true), 0);
+    return t;
+  }
+}
+
 let driver: NetDriver | null = null;
-/** Один транспорт на всё приложение: Bluetooth в Android, вкладки — в браузере. */
-export function pickDriver(): NetDriver {
+let online: OnlineDriver | null = null;
+/** Ближняя связь: Bluetooth в Android, вкладки — в браузере. */
+export function localDriver(): NetDriver {
   if (!driver) { const bt = nativeBluetooth(); driver = bt ? new BluetoothDriver(bt) : new TabsDriver(); }
   return driver;
 }
+export function onlineDriver(): OnlineDriver { return online ??= new OnlineDriver(); }
+
+let current: NetDriver | null = null;
+/** Связь, которой идёт текущая партия (нужна при передаче стола другому игроку). */
+export function pickDriver(): NetDriver { return current ?? localDriver(); }
+export function useDriver(d: NetDriver) { current = d; }

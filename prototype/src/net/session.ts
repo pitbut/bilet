@@ -94,10 +94,12 @@ export class NetHost {
   private message(peer: string, m: ToHost) {
     if (m.t === "hello") {
       if (m.v !== PROTOCOL) { this.send(peer, { t: "full", why: "Разные версии игры — обновите приложение" }); return; }
-      const back = this.started ? this.guests.find((x) => !x.online && x.name === m.name && x.seat !== null) : undefined;
+      // Тот же игрок мог переподключиться раньше, чем мы заметили обрыв старой связи.
+      const back = this.started ? this.guests.find((x) => x.name === m.name && x.seat !== null && (!x.online || x.peer !== peer)) : undefined;
       if (back) { // вернулся после обрыва связи
+        const was = back.online;
         back.peer = peer; back.online = true;
-        this.onGuestBack(back.seat!);
+        if (!was) this.onGuestBack(back.seat!);
         if (this.current) this.send(peer, { t: "start", state: snapshot(this.current), seat: back.seat!, net: this.info() });
         return;
       }
@@ -162,6 +164,9 @@ export class NetHost {
     });
   }
 
+  /** Игра началась: комната пропадает из общего списка (вернуться можно по коду). */
+  markStarted(players: number) { this.tr.meta?.(players, true); }
+
   close() { this.tr.close(); }
 }
 
@@ -193,6 +198,8 @@ export class NetClient {
       try { m = JSON.parse(data) as ToGuest; } catch { return; }
       this.message(m);
     };
+    tr.onResume = () => this.send({ t: "hello", name, v: PROTOCOL });
+    tr.onFail = (why) => { if (!this.gone) { this.gone = true; this.onLost(why); } };
     this.send({ t: "hello", name, v: PROTOCOL });
   }
 
