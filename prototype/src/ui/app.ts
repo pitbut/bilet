@@ -89,6 +89,16 @@ export class App {
   private insure = false;
   /** Сетевая партия: хозяин (seat 0) или гость со своим местом. */
   private net: { role: "host"; host: NetHost; seat: number } | { role: "client"; client: NetClient; seat: number } | null = null;
+  /** Сетевая игра (хозяин): часы хода. Кто молчит дольше лимита — за того доигрывает бот. */
+  private turnClock = { key: "", pid: -1, deadline: 0, total: 0 };
+  private clockTimer = 0;
+  /** Игроки, за которых бот доигрывает только текущий ход (номер хода). */
+  private autoTurn = new Map<number, number>();
+  /** Сколько раз подряд игрок не успел. Дважды — считаем, что отошёл: бот играет, пока он не вернётся. */
+  private strikes = new Map<number, number>();
+  private away = new Set<number>();
+  private clockEl = h("div", { class: "chip clockchip hidden" });
+  private awayBox: HTMLElement | null = null;
   private remoteQueue: { state: GameState; events: GameEvent[] }[] = [];
   private applying = false;
   private bidding = false;
@@ -168,10 +178,106 @@ export class App {
       void this.step();
     };
     host.onGuestBack = (seat) => {
+      this.away.delete(seat); this.autoTurn.delete(seat); this.strikes.delete(seat);
       this.s.players[seat].bot = false;
       this.toast(`${this.s.players[seat].name} вернулся в игру`, "good");
       void this.step();
     };
+    host.onGuestReturn = (seat) => this.returnToGame(seat);
+    host.clock = () => {
+      this.updateClock();
+      const c = this.turnClock;
+      return c.pid < 0 ? null : { pid: c.pid, left: Math.max(0, Math.round((c.deadline - Date.now()) / 1000)), total: c.total };
+    };
+    clearInterval(this.clockTimer);
+    this.clockTimer = window.setInterval(() => this.tickClock(), 1000);
+  }
+
+  /** Сколько секунд даём на ход и на ставку в сетевой игре. */
+  static TURN_SECONDS = 60;
+  static BID_SECONDS = 20;
+
+  /** Хозяин: кто сейчас должен действовать; новый ход или новая фаза — часы заводятся заново. */
+  private updateClock() {
+    const s = this.s, c = this.turnClock;
+    let pid = -1, total = App.TURN_SECONDS, tag = "";
+    if (s.phase === "auction" && s.pending?.kind === "auction" && s.pending.waiting.length) { pid = s.pending.waiting[0]; total = App.BID_SECONDS; tag = `bid${s.pending.cell}`; }
+    else if (s.phase !== "gameover") pid = s.current;
+    if (pid >= 0 && (s.players[pid].bot || s.players[pid].bankrupt)) pid = -1;
+    const key = `${s.turnCounter}:${s.phase}:${pid}:${tag}`;
+    if (key !== c.key) Object.assign(c, { key, pid, total, deadline: Date.now() + total * 1000 });
+  }
+
+  /** Игрок что-то сделал — время снова полное. */
+  private touchClock(pid: number) {
+    this.strikes.delete(pid);
+    if (this.turnClock.pid === pid) this.turnClock.deadline = Date.now() + this.turnClock.total * 1000;
+  }
+
+  private tickClock() {
+    if (this.net?.role === "host") {
+      const s = this.s;
+      // Ход, который доигрывал бот, закончился — возвращаем игроку управление.
+      for (const [pid, turn] of this.autoTurn) {
+        if (turn !== s.turnCounter && !this.away.has(pid)) {
+          this.autoTurn.delete(pid);
+          if (pid === this.net.seat || this.net.host.isOnline(pid)) { s.players[pid].bot = false; this.net.host.broadcast(s, []); this.render(); }
+        }
+      }
+      this.updateClock();
+      const c = this.turnClock;
+      if (c.pid >= 0 && Date.now() > c.deadline && !this.stepping && s.phase !== "gameover") this.timeOut(c.pid);
+    }
+    this.renderClock();
+  }
+
+  /** Время вышло: ставка — пас, ход — доигрывает бот. */
+  private timeOut(pid: number) {
+    const s = this.s, p = s.players[pid];
+    this.turnClock.key = "";
+    if (s.phase === "auction" && s.pending?.kind === "auction" && s.pending.waiting[0] === pid) {
+      act(s, pid, { t: "bid", amount: 0 });
+      this.toast(`${p.name} не успел сделать ставку — пас`, "warn");
+      if (pid === this.net?.seat) this.closeModal();
+      void this.step();
+      return;
+    }
+    const n = (this.strikes.get(pid) ?? 0) + 1;
+    this.strikes.set(pid, n);
+    p.bot = true; p.personality = p.personality ?? "trader"; p.difficulty = p.difficulty ?? "normal";
+    this.autoTurn.set(pid, s.turnCounter);
+    if (n >= 2) this.away.add(pid);
+    this.toast(n >= 2 ? `${p.name} отошёл — за него играет бот, пока он не вернётся` : `${p.name} думал слишком долго — ход доиграет бот`, "warn", 4000);
+    if (pid === this.net?.seat) this.closeModal();
+    this.net?.role === "host" && this.net.host.broadcast(s, []);
+    void this.step();
+  }
+
+  /** «Вернуться в игру»: бот отдаёт управление (сразу, если не его ход; иначе после хода). */
+  private returnToGame(pid: number) {
+    const s = this.s, p = s.players[pid];
+    this.away.delete(pid); this.strikes.delete(pid);
+    if (!p.bot || p.bankrupt) return;
+    if (s.current === pid && this.autoTurn.has(pid)) { this.autoTurn.set(pid, s.turnCounter); this.toast(`${p.name} вернулся — со следующего хода играет сам`, "good"); }
+    else { this.autoTurn.delete(pid); p.bot = false; this.toast(`${p.name} вернулся в игру`, "good"); }
+    if (this.net?.role === "host") this.net.host.broadcast(s, []);
+    this.render();
+    void this.step();
+  }
+
+  /** Часы хода вверху экрана (у хозяина и у гостей). */
+  private renderClock() {
+    let pid = -1, left = 0;
+    if (this.net?.role === "host") { const c = this.turnClock; pid = c.pid; left = (c.deadline - Date.now()) / 1000; }
+    else if (this.net?.role === "client" && this.net.client.clock) { const c = this.net.client.clock; pid = c.pid; left = (c.until - Date.now()) / 1000; }
+    const show = pid >= 0 && !this.s.players[pid]?.bot && this.s.phase !== "gameover";
+    this.clockEl.classList.toggle("hidden", !show);
+    if (!show) return;
+    const sec = Math.max(0, Math.ceil(left));
+    const mine = pid === this.net?.seat;
+    this.clockEl.textContent = `⏱ ${mine ? "Ваш ход" : this.s.players[pid].name}: ${sec} с`;
+    this.clockEl.classList.toggle("urgent", sec <= 10);
+    this.clockEl.classList.toggle("mine", mine);
   }
 
   /** Гость: состояние приходит от хозяина, действия уходят хозяину. */
@@ -190,6 +296,8 @@ export class App {
 
   private attachClient(client: NetClient, seat: number) {
     this.net = { role: "client", client, seat };
+    clearInterval(this.clockTimer);
+    this.clockTimer = window.setInterval(() => this.renderClock(), 1000);
     client.onState = (st, events) => { this.remoteQueue.push({ state: st, events }); void this.applyRemote(); };
     client.onStart = (st) => { this.remoteQueue.push({ state: st, events: [] }); void this.applyRemote(); };
     client.onAsk = (q) => this.askLocal(this.s.players[seat].name, q);
@@ -284,6 +392,7 @@ export class App {
   /** Выполнить действие: у хозяина и в обычной игре — сразу, у гостя — через хозяина. */
   private async exec(pid: number, a: Action): Promise<ActReply> {
     if (this.net?.role === "client") return this.net.client.request(pid, a);
+    if (this.net) this.touchClock(pid);
     const n0 = this.s.events.length;
     const r = act(this.s, pid, a);
     return { r, events: this.s.events.slice(n0) };
@@ -309,6 +418,7 @@ export class App {
   }
 
   private async hostRequest(pid: number, a: Action): Promise<ActReply> {
+    this.touchClock(pid);
     a = await this.withVotes(pid, a);
     if (a.t === "buyCoop") {
       const declined: string[] = [];
@@ -544,7 +654,8 @@ export class App {
     const unread = this.unread(me.id);
     const inbox = button(`📨${unread ? ` ${unread}` : ""}`, () => this.showInbox(), `small chipbtn${unread ? " hotbtn" : ""}`);
     inbox.title = "Входящие от банка и биржи";
-    this.bar.replaceChildren(chip, others, exch, life, inbox, lounge, turn);
+    this.bar.replaceChildren(chip, others, exch, life, inbox, lounge, turn, this.clockEl);
+    this.renderClock();
   }
 
   private render() {
@@ -731,6 +842,20 @@ export class App {
     const s = this.s, cur = s.players[s.current];
     const p = this.panel;
     if (s.phase === "gameover") { p.replaceChildren(); return; }
+    const me = this.net ? s.players[this.net.seat] : null;
+    if (me && me.bot && !me.bankrupt) {
+      // Один и тот же блок: бот ходит быстро, и кнопка, пересоздаваемая на каждом шаге, «убегала» из-под пальца.
+      if (!this.awayBox) {
+        const back = button("🙋 Вернуться в игру", () => {
+          back.disabled = true; back.textContent = "Возвращаемся…";
+          if (this.net?.role === "client") this.net.client.back(); else this.returnToGame(me.id);
+        }, "primary");
+        this.awayBox = h("div", {}, h("div", { class: "turn" }, "🤖 Пока за вас играет бот", h("div", { class: "sub" }, `Вы не успели сходить за ${App.TURN_SECONDS} секунд. Нажмите, чтобы снова играть самому.`)), h("div", { class: "row" }, back));
+      }
+      if (p.firstChild !== this.awayBox) p.replaceChildren(this.awayBox);
+      return;
+    }
+    this.awayBox = null;
     if (!this.isLocal(cur.id) || this.waitingPass || this.stepping && s.phase === "auction") {
       p.replaceChildren(h("div", { class: "hint" }, !this.isLocal(cur.id) ? `Ходит ${cur.name}…` : ""));
       return;

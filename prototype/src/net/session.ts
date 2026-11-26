@@ -3,7 +3,10 @@
 import { Action, GameEvent, GameState, Result } from "../engine/engine";
 import { Transport } from "./transport";
 
-export const PROTOCOL = 4;
+export const PROTOCOL = 5;
+
+/** Часы хода: кто сейчас должен действовать и сколько секунд у него осталось. */
+export interface Clock { pid: number; left: number; total: number }
 
 export interface LobbySeat { name: string; kind: "host" | "guest" | "bot" }
 
@@ -22,12 +25,13 @@ export const migratedTable = (info: NetInfo, newHostName: string) => `${info.tab
 type ToHost =
   | { t: "hello"; name: string; v: number }
   | { t: "req"; id: number; pid: number; a: Action }
-  | { t: "askres"; id: number; yes: boolean };
+  | { t: "askres"; id: number; yes: boolean }
+  | { t: "back" };
 
 type ToGuest =
   | { t: "lobby"; seats: LobbySeat[] }
-  | { t: "start"; state: GameState; seat: number; net: NetInfo }
-  | { t: "state"; state: GameState; events: GameEvent[]; net: NetInfo }
+  | { t: "start"; state: GameState; seat: number; net: NetInfo; clock?: Clock | null }
+  | { t: "state"; state: GameState; events: GameEvent[]; net: NetInfo; clock?: Clock | null }
   | { t: "res"; id: number; r: Result; events: GameEvent[] }
   | { t: "ask"; id: number; q: string }
   | { t: "full"; why: string };
@@ -49,6 +53,10 @@ export class NetHost {
   onRequest: (seat: number, pid: number, a: Action) => Promise<ActReply> = async () => ({ r: { ok: false, error: "Игра не начата" }, events: [] });
   onGuestLost: (seat: number) => void = () => {};
   onGuestBack: (seat: number) => void = () => {};
+  /** Гость нажал «Вернуться в игру» (за него играл бот, пока он думал слишком долго). */
+  onGuestReturn: (seat: number) => void = () => {};
+  /** Часы хода — уходят гостям вместе с каждым состоянием. */
+  clock: () => Clock | null = () => null;
   private asks = new Map<number, (yes: boolean) => void>();
   private askId = 1;
   private current: GameState | null = null;
@@ -100,7 +108,7 @@ export class NetHost {
         const was = back.online;
         back.peer = peer; back.online = true;
         if (!was) this.onGuestBack(back.seat!);
-        if (this.current) this.send(peer, { t: "start", state: snapshot(this.current), seat: back.seat!, net: this.info() });
+        if (this.current) this.send(peer, { t: "start", state: snapshot(this.current), seat: back.seat!, net: this.info(), clock: this.clock() });
         return;
       }
       if (this.started) { this.send(peer, { t: "full", why: "Партия уже идёт" }); return; }
@@ -117,6 +125,8 @@ export class NetHost {
       const seat = g.seat;
       void (m.pid === seat ? this.onRequest(seat, m.pid, m.a) : Promise.resolve({ r: { ok: false, error: "Чужой ход" }, events: [] }))
         .then((reply) => this.send(peer, { t: "res", id: m.id, ...reply }));
+    } else if (m.t === "back") {
+      this.onGuestReturn(g.seat);
     } else if (m.t === "askres") {
       this.asks.get(m.id)?.(m.yes);
       this.asks.delete(m.id);
@@ -140,12 +150,12 @@ export class NetHost {
   start(state: GameState) {
     this.started = true;
     this.current = state;
-    for (const g of this.guests) if (g.online && g.seat !== null) this.send(g.peer, { t: "start", state: snapshot(state), seat: g.seat, net: this.info() });
+    for (const g of this.guests) if (g.online && g.seat !== null) this.send(g.peer, { t: "start", state: snapshot(state), seat: g.seat, net: this.info(), clock: this.clock() });
   }
 
   broadcast(state: GameState, events: GameEvent[]) {
     this.current = state;
-    const m: ToGuest = { t: "state", state: snapshot(state), events, net: this.info() };
+    const m: ToGuest = { t: "state", state: snapshot(state), events, net: this.info(), clock: this.clock() };
     const data = JSON.stringify(m);
     for (const g of this.guests) if (g.online) this.tr.send(g.peer, data);
   }
@@ -183,6 +193,8 @@ export class NetClient {
   /** Хозяин пропал посреди партии — пора выбирать нового. */
   onHostGone: (info: NetInfo) => void = () => {};
   info: NetInfo | null = null;
+  /** Часы хода от хозяина: до какого момента (по часам этого телефона) ждут действия. */
+  clock: { pid: number; until: number; total: number } | null = null;
   private gone = false;
   private reqs = new Map<number, (r: ActReply) => void>();
   private reqId = 1;
@@ -207,12 +219,19 @@ export class NetClient {
 
   private message(m: ToGuest) {
     if (m.t === "lobby") { this.seats = m.seats; this.onLobby(); }
-    else if (m.t === "start") { this.seat = m.seat; this.info = m.net; this.onStart(m.state, m.seat); }
-    else if (m.t === "state") { this.info = m.net; this.onState(m.state, m.events); }
+    else if (m.t === "start") { this.seat = m.seat; this.info = m.net; this.setClock(m.clock); this.onStart(m.state, m.seat); }
+    else if (m.t === "state") { this.info = m.net; this.setClock(m.clock); this.onState(m.state, m.events); }
     else if (m.t === "res") { this.reqs.get(m.id)?.({ r: m.r, events: m.events }); this.reqs.delete(m.id); }
     else if (m.t === "ask") void this.onAsk(m.q).then((yes) => this.send({ t: "askres", id: m.id, yes }));
     else if (m.t === "full") this.onLost(m.why);
   }
+
+  private setClock(c: Clock | null | undefined) {
+    this.clock = c ? { pid: c.pid, until: Date.now() + c.left * 1000, total: c.total } : null;
+  }
+
+  /** «Вернуться в игру» — забрать ход у бота. */
+  back() { this.send({ t: "back" }); }
 
   request(pid: number, a: Action): Promise<ActReply> {
     const id = this.reqId++;

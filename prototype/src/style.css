@@ -313,3 +313,10 @@ button.danger { background: #b3261e; color: #fff; border-color: #b3261e; }
 /* Комнаты через интернет */
 .roomcode { font-size: 44px; font-weight: 800; letter-spacing: 10px; text-align: center; padding: 8px 0; color: #ffd54f; font-variant-numeric: tabular-nums; }
 .codeinput { font-size: 28px; letter-spacing: 8px; text-align: center; width: 9em; font-variant-numeric: tabular-nums; }
+
+/* Часы хода в сетевой игре */
+.chip.clockchip { font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.clockchip.hidden { display: none; }
+.chip.clockchip.mine { background: #fff8e1; color: #8d6e00; }
+.chip.clockchip.urgent { background: #ffebee; color: #c62828; animation: clockpulse 1s infinite; }
+@keyframes clockpulse { 50% { transform: scale(1.06); } }
